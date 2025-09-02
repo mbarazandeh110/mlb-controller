@@ -1,0 +1,144 @@
+# Global configuration for upstream synchronization
+# Specifies the default period for syncing upstreams across all load balancers
+global_upstream_sync_period: 10s # default sync period for all load balancers
+
+# Leader election settings for ensuring a single controller instance
+leader_election:
+  enabled: true # default false
+  lease_name: mlb-controller-leader # required if leader_election.enabled: true
+  lease_namespace: mlb-system # required if leader_election.enabled: true
+  lease_duration: 15s # default 15s
+  renew_deadline: 10s # default 10s
+  retry_period: 2s # default 2s
+
+# Logging configuration
+log:
+  enabled: true # default false
+  level: error # default info, must be one of: debug, info, warn, error, fatal
+  format: json # default json, must be one of: console, json
+
+# Metrics configuration for Prometheus
+metrics:
+  enabled: true # default false
+  port: 9090 # default 9090
+  uri: /metrics # default /metrics
+
+# Kubernetes client configuration
+kubernetes:
+  resync_period: 20s # default 30s
+  kubernetes_config: "path/to/conf" # path to kubeconfig file
+
+# Global IP and network replacement rules
+global_ip_replacement_list:
+  net:
+    - name: cdn1
+      nets:
+        - source: 172.16.20.0 # must be a valid IP
+          target: 172.30.20.0 # must be a valid IP
+          mask: 24 # must be between 0 and 32
+        - source: 172.16.22.0 # must be a valid IP
+          target: 172.30.22.0 # must be a valid IP
+          mask: 24 # must be between 0 and 32
+    - name: internal
+      nets:
+        - source: 172.17.20.0 # must be a valid IP
+          target: 172.30.20.0 # must be a valid IP
+          mask: 24 # must be between 0 and 32
+    - name: internal2
+      nets:
+        - source: 172.17.28.0 # must be a valid IP
+          target: 172.30.20.0 # must be a valid IP
+          mask: 24 # must be between 0 and 32
+  ip:
+    - name: lb2
+      ips:
+        - source: 172.16.21.5 # must be a valid IP
+          target: 172.20.21.7 # must be a valid IP
+        - source: 172.16.21.2 # must be a valid IP
+          target: 172.20.21.3 # must be a valid IP
+
+# Load balancer configurations for Nginx and Envoy
+loadbalancers:
+  nginx:
+    - name: CDN # must be unique across all load balancers
+      ip_replacement: true
+      update_period: 1s
+      ip_replacement_list:
+        nets:
+          - source: 172.16.27.0 # must be a valid IP
+            target: 172.30.23.0 # must be a valid IP
+            mask: 25 # must be between 0 and 32
+        ips:
+          - source: 172.16.21.1 # must be a valid IP
+            target: 172.20.21.2 # must be a valid IP
+        global_net_refs:
+          - cdn1
+        global_ip_refs:
+          - lb2
+      addresses:
+        - protocol: http
+          ip: 1.2.3.4
+          port: 80
+          hostname: 'test.com' # must be a valid domain name
+        - protocol: https
+          ip: 2.3.4.5
+          port: 55
+          hostname: 'test.com' # required for https
+      list_api: /api/upstream
+      upstream_sync_period: 1s # default is global_upstream_sync_period (3s)
+      add_api: /dynamic
+      remove_api: /dynamic
+      fail_timeout: 60s # default 60s
+      request_timeout: 10s # default 30s
+    - name: localCDN # must be unique across all load balancers
+      ip_replacement: true
+      ip_replacement_list:
+        global_net_refs:
+          - internal
+      addresses:
+        - protocol: http
+          ip: 6.2.3.4
+          port: 82
+          hostname: 'test.com'
+        - protocol: http
+          ip: 6.3.4.5
+          port: 59
+          hostname: 'test.com'
+      list_api: /api/upstream
+      add_api: /dynamic
+      remove_api: /dynamic
+  envoy:
+    - name: LoadBalancer1 # must be unique across all load balancers
+      ip_replacement: true
+      ip_replacement_list:
+        nets:
+          - source: 172.16.23.0 # must be a valid IP
+            target: 172.30.23.0 # must be a valid IP
+            mask: 24 # must be between 0 and 32
+        ips:
+          - source: 172.16.21.1 # must be a valid IP
+            target: 172.20.21.2 # must be a valid IP
+        global_net_refs:
+          - cdn1
+        global_ip_refs:
+          - lb2
+      addresses:
+        - protocol: grpc
+          ip: 1.2.3.41
+          port: 81
+          hostname: 'test.com'
+        - protocol: grpc
+          ip: 2.3.4.56
+          port: 56
+          hostname: example.com # required for https
+      upstream_sync_period: 2s # default is global_upstream_sync_period (3s)
+      request_timeout: 10s # default 30s
+    - name: localLB # must be unique across all load balancers
+      addresses:
+        - protocol: http
+          ip: 6.2.3.45
+          port: 80
+        - protocol: https
+          ip: 6.3.4.56
+          port: 56
+          hostname: 'example.com' # require is protocol is https
