@@ -16,14 +16,14 @@ import (
 func TestNewLogger(t *testing.T) {
 	tests := []struct {
 		name        string
-		config      Config
+		config      LogConfig
 		wantLevel   zapcore.Level
 		wantFormat  string
 		expectError bool
 	}{
 		{
 			name: "Valid Info JSON",
-			config: Config{
+			config: LogConfig{
 				Level:  "info",
 				Format: "json",
 			},
@@ -33,7 +33,7 @@ func TestNewLogger(t *testing.T) {
 		},
 		{
 			name: "Valid Debug Console",
-			config: Config{
+			config: LogConfig{
 				Level:  "debug",
 				Format: "console",
 			},
@@ -43,7 +43,7 @@ func TestNewLogger(t *testing.T) {
 		},
 		{
 			name: "Invalid Level",
-			config: Config{
+			config: LogConfig{
 				Level:  "invalid",
 				Format: "json",
 			},
@@ -78,7 +78,7 @@ func TestNewLogger(t *testing.T) {
 func TestLoggerMethods(t *testing.T) {
 	// Use a buffer to capture log output
 	var buf bytes.Buffer
-	cfg := Config{Level: "debug", Format: "json"}
+	cfg := LogConfig{Level: "debug", Format: "json"}
 	logger, err := newTestLogger(cfg, &buf)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
@@ -147,7 +147,7 @@ func TestLoggerMethods(t *testing.T) {
 func TestLoggerWith(t *testing.T) {
 	// Use a buffer to capture log output
 	var buf bytes.Buffer
-	cfg := Config{Level: "info", Format: "json"}
+	cfg := LogConfig{Level: "info", Format: "json"}
 	logger, err := newTestLogger(cfg, &buf)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
@@ -176,7 +176,7 @@ func TestLoggerWith(t *testing.T) {
 
 func TestLoggerSync(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := Config{Level: "info", Format: "json"}
+	cfg := LogConfig{Level: "info", Format: "json"}
 	logger, err := newTestLogger(cfg, &buf)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
@@ -189,7 +189,7 @@ func TestLoggerSync(t *testing.T) {
 }
 
 // newTestLogger creates a logger with the given config and output buffer for testing.
-func newTestLogger(cfg Config, buf *bytes.Buffer) (ports.Logger, error) {
+func newTestLogger(cfg LogConfig, buf *bytes.Buffer) (ports.Logger, error) {
 	level, err := parseLevel(cfg.Level)
 	if err != nil {
 		return nil, err

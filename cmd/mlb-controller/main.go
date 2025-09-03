@@ -13,7 +13,7 @@ func main() {
 	flag.Parse()
 
 	// Initialize logger with default configuration (info level, JSON format)
-	defaultLoggerCfg := logging.Config{
+	defaultLoggerCfg := logging.LogConfig{
 		Level:  "info",
 		Format: "json",
 	}

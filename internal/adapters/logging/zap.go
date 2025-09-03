@@ -11,8 +11,8 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// Config defines logger configuration.
-type Config struct {
+// LogConfig defines logger configuration.
+type LogConfig struct {
 	Level  string `yaml:"level"`  // debug, info, warn, error, fatal
 	Format string `yaml:"format"` // json, console
 }
@@ -23,7 +23,7 @@ type zapLogger struct {
 }
 
 // New creates a new zap-based logger based on the provided configuration.
-func New(cfg Config) (ports.Logger, error) {
+func New(cfg LogConfig) (ports.Logger, error) {
 	level, err := parseLevel(cfg.Level)
 	if err != nil {
 		return nil, err
