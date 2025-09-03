@@ -16,14 +16,14 @@ import (
 func TestNewLogger(t *testing.T) {
 	tests := []struct {
 		name        string
-		config      LogConfig
+		config      Config
 		wantLevel   zapcore.Level
 		wantFormat  string
 		expectError bool
 	}{
 		{
 			name: "Valid Info JSON",
-			config: LogConfig{
+			config: Config{
 				Level:  "info",
 				Format: "json",
 			},
@@ -33,7 +33,7 @@ func TestNewLogger(t *testing.T) {
 		},
 		{
 			name: "Valid Debug Console",
-			config: LogConfig{
+			config: Config{
 				Level:  "debug",
 				Format: "console",
 			},
@@ -43,7 +43,7 @@ func TestNewLogger(t *testing.T) {
 		},
 		{
 			name: "Invalid Level",
-			config: LogConfig{
+			config: Config{
 				Level:  "invalid",
 				Format: "json",
 			},
@@ -78,7 +78,7 @@ func TestNewLogger(t *testing.T) {
 func TestLoggerMethods(t *testing.T) {
 	// Use a buffer to capture log output
 	var buf bytes.Buffer
-	cfg := LogConfig{Level: "debug", Format: "json"}
+	cfg := Config{Level: "debug", Format: "json"}
 	logger, err := newTestLogger(cfg, &buf)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
@@ -87,37 +87,37 @@ func TestLoggerMethods(t *testing.T) {
 	// Test log methods
 	tests := []struct {
 		name      string
-		logFunc   func(string, ...zap.Field)
+		logFunc   func(string, ...ports.Field)
 		message   string
-		fields    []zap.Field
+		fields    []ports.Field
 		wantLevel string
 	}{
 		{
 			name:      "Debug",
 			logFunc:   logger.Debug,
 			message:   "Debug message",
-			fields:    []zap.Field{zap.String("key", "value")},
+			fields:    []ports.Field{{Key: "key", Value: "value"}},
 			wantLevel: "DEBUG",
 		},
 		{
 			name:      "Info",
 			logFunc:   logger.Info,
 			message:   "Info message",
-			fields:    []zap.Field{zap.Int("count", 42)},
+			fields:    []ports.Field{{Key: "count", Value: 42}},
 			wantLevel: "INFO",
 		},
 		{
 			name:      "Warn",
 			logFunc:   logger.Warn,
 			message:   "Warn message",
-			fields:    []zap.Field{},
+			fields:    []ports.Field{},
 			wantLevel: "WARN",
 		},
 		{
 			name:      "Error",
 			logFunc:   logger.Error,
 			message:   "Error message",
-			fields:    []zap.Field{zap.Error(fmt.Errorf("test error"))},
+			fields:    []ports.Field{{Key: "error", Value: fmt.Errorf("test error")}},
 			wantLevel: "ERROR",
 		},
 	}
@@ -147,14 +147,14 @@ func TestLoggerMethods(t *testing.T) {
 func TestLoggerWith(t *testing.T) {
 	// Use a buffer to capture log output
 	var buf bytes.Buffer
-	cfg := LogConfig{Level: "info", Format: "json"}
+	cfg := Config{Level: "info", Format: "json"}
 	logger, err := newTestLogger(cfg, &buf)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
 	}
 
 	// Create logger with additional fields
-	newLogger := logger.With(zap.String("context", "test"), zap.Int("id", 1))
+	newLogger := logger.With(ports.Field{Key: "context", Value: "test"}, ports.Field{Key: "id", Value: 1})
 
 	// Log a message
 	newLogger.Info("Test with fields")
@@ -176,7 +176,7 @@ func TestLoggerWith(t *testing.T) {
 
 func TestLoggerSync(t *testing.T) {
 	var buf bytes.Buffer
-	cfg := LogConfig{Level: "info", Format: "json"}
+	cfg := Config{Level: "info", Format: "json"}
 	logger, err := newTestLogger(cfg, &buf)
 	if err != nil {
 		t.Fatalf("Failed to create logger: %v", err)
@@ -189,7 +189,7 @@ func TestLoggerSync(t *testing.T) {
 }
 
 // newTestLogger creates a logger with the given config and output buffer for testing.
-func newTestLogger(cfg LogConfig, buf *bytes.Buffer) (ports.Logger, error) {
+func newTestLogger(cfg Config, buf *bytes.Buffer) (ports.Logger, error) {
 	level, err := parseLevel(cfg.Level)
 	if err != nil {
 		return nil, err
