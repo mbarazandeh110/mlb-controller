@@ -11,19 +11,13 @@ import (
 	"mlb-controller/internal/ports"
 )
 
-// Config defines logger configuration.
-type Config struct {
-	Level  string `yaml:"level"`  // debug, info, warn, error, fatal
-	Format string `yaml:"format"` // json, console
-}
-
 // zapLogger implements ports.Logger using zap.
 type zapLogger struct {
 	zap *zap.Logger
 }
 
 // New creates a new zap-based logger based on the provided configuration.
-func New(cfg Config) (ports.Logger, error) {
+func New(cfg ports.LogConfig) (ports.Logger, error) {
 	level, err := parseLevel(cfg.Level)
 	if err != nil {
 		// Return error instead of writing to stderr for better error handling

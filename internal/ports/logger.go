@@ -12,3 +12,9 @@ type Logger interface {
 	With(fields ...zap.Field) Logger
 	Sync() error
 }
+
+// LogConfig defines logger configuration.
+type LogConfig struct {
+	Level  string `yaml:"level"`  // debug, info, warn, error, fatal
+	Format string `yaml:"format"` // json, console
+}
