@@ -5,11 +5,17 @@ import (
 	"os"
 	"strings"
 
+	"mlb-controller/internal/ports"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-
-	"mlb-controller/internal/ports"
 )
+
+// Config defines logger configuration.
+type Config struct {
+	Level  string `yaml:"level"`  // debug, info, warn, error, fatal
+	Format string `yaml:"format"` // json, console
+}
 
 // zapLogger implements ports.Logger using zap.
 type zapLogger struct {
@@ -17,10 +23,9 @@ type zapLogger struct {
 }
 
 // New creates a new zap-based logger based on the provided configuration.
-func New(cfg ports.LogConfig) (ports.Logger, error) {
+func New(cfg Config) (ports.Logger, error) {
 	level, err := parseLevel(cfg.Level)
 	if err != nil {
-		// Return error instead of writing to stderr for better error handling
 		return nil, err
 	}
 
@@ -68,13 +73,42 @@ func parseLevel(level string) (zapcore.Level, error) {
 	}
 }
 
-func (l *zapLogger) Debug(msg string, fields ...zap.Field) { l.zap.Debug(msg, fields...) }
-func (l *zapLogger) Info(msg string, fields ...zap.Field)  { l.zap.Info(msg, fields...) }
-func (l *zapLogger) Warn(msg string, fields ...zap.Field)  { l.zap.Warn(msg, fields...) }
-func (l *zapLogger) Error(msg string, fields ...zap.Field) { l.zap.Error(msg, fields...) }
-func (l *zapLogger) Fatal(msg string, fields ...zap.Field) { l.zap.Fatal(msg, fields...) }
-func (l *zapLogger) With(fields ...zap.Field) ports.Logger {
-	return &zapLogger{zap: l.zap.With(fields...)}
+// toZapFields converts ports.Field to zap.Field.
+func toZapFields(fields ...ports.Field) []zap.Field {
+	zapFields := make([]zap.Field, len(fields))
+	for i, f := range fields {
+		switch v := f.Value.(type) {
+		case string:
+			zapFields[i] = zap.String(f.Key, v)
+		case int:
+			zapFields[i] = zap.Int(f.Key, v)
+		case error:
+			zapFields[i] = zap.Error(v)
+		default:
+			zapFields[i] = zap.Any(f.Key, v)
+		}
+	}
+	return zapFields
+}
+
+func (l *zapLogger) Debug(msg string, fields ...ports.Field) {
+	l.zap.Debug(msg, toZapFields(fields...)...)
+}
+func (l *zapLogger) Info(msg string, fields ...ports.Field) {
+	l.zap.Info(msg, toZapFields(fields...)...)
+}
+func (l *zapLogger) Warn(msg string, fields ...ports.Field) {
+	l.zap.Warn(msg, toZapFields(fields...)...)
+}
+func (l *zapLogger) Error(msg string, fields ...ports.Field) {
+	l.zap.Error(msg, toZapFields(fields...)...)
+}
+func (l *zapLogger) Fatal(msg string, fields ...ports.Field) {
+	l.zap.Fatal(msg, toZapFields(fields...)...)
+}
+
+func (l *zapLogger) With(fields ...ports.Field) ports.Logger {
+	return &zapLogger{zap: l.zap.With(toZapFields(fields...)...)}
 }
 
 // Sync flushes any buffered log entries.

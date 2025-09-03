@@ -7,15 +7,13 @@ import (
 
 	"mlb-controller/internal/adapters/logging"
 	"mlb-controller/internal/ports"
-
-	"go.uber.org/zap"
 )
 
 func main() {
 	flag.Parse()
 
 	// Initialize logger with default configuration (info level, JSON format)
-	defaultLoggerCfg := ports.LogConfig{
+	defaultLoggerCfg := logging.Config{
 		Level:  "info",
 		Format: "json",
 	}
@@ -27,11 +25,11 @@ func main() {
 	}
 	defer func() {
 		if err := log.Sync(); err != nil {
-			log.Error("Failed to sync logger", zap.Error(err))
+			log.Error("Failed to sync logger", ports.Field{Key: "error", Value: err})
 		}
 	}()
 
 	// Example log messages to verify logger functionality
-	log.Info("Logger initialized successfully", zap.String("app", "mlb-controller"))
-	log.Debug("This is a debug message", zap.Int("version", 1))
+	log.Info("Logger initialized successfully", ports.Field{Key: "app", Value: "mlb-controller"})
+	log.Debug("This is a debug message", ports.Field{Key: "version", Value: 1})
 }
