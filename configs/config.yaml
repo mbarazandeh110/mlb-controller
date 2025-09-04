@@ -14,7 +14,7 @@ leader_election:
 # Logging configuration
 log:
   enabled: true # default false
-  level: error # default info, must be one of: debug, info, warn, error, fatal
+  level: info # default info, must be one of: debug, info, warn, error, fatal
   format: json # default json, must be one of: console, json
 
 # Metrics configuration for Prometheus
