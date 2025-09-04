@@ -1,4 +1,4 @@
-package ports
+package logging
 
 // Field represents a key-value pair for structured logging.
 type Field struct {

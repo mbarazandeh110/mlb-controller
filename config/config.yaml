@@ -71,9 +71,9 @@ loadbalancers:
         ips:
           - source: 172.16.21.1 # must be a valid IP
             target: 172.20.21.2 # must be a valid IP
-        global_net_refs:
+        global_nets:
           - cdn1
-        global_ip_refs:
+        global_ips:
           - lb2
       addresses:
         - protocol: http
@@ -93,7 +93,7 @@ loadbalancers:
     - name: localCDN # must be unique across all load balancers
       ip_replacement: true
       ip_replacement_list:
-        global_net_refs:
+        global_nets:
           - internal
       addresses:
         - protocol: http
@@ -118,9 +118,9 @@ loadbalancers:
         ips:
           - source: 172.16.21.1 # must be a valid IP
             target: 172.20.21.2 # must be a valid IP
-        global_net_refs:
+        global_nets:
           - cdn1
-        global_ip_refs:
+        global_ips:
           - lb2
       addresses:
         - protocol: grpc

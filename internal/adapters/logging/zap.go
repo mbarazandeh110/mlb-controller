@@ -5,7 +5,7 @@ import (
 	"os"
 	"strings"
 
-	"mlb-controller/internal/ports"
+	ports "mlb-controller/internal/ports/logging"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"

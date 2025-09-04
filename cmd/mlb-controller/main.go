@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 
-	"mlb-controller/internal/adapters/logging"
-	"mlb-controller/internal/config"
-	"mlb-controller/internal/ports"
+	logging_adapters "mlb-controller/internal/adapters/logging"
+	logging_ports "mlb-controller/internal/ports/logging"
+
+	config_adapters "mlb-controller/internal/adapters/config"
+	config_ports "mlb-controller/internal/ports/config"
 )
 
 func main() {
@@ -16,30 +18,33 @@ func main() {
 	flag.Parse()
 
 	// Initialize logger with default configuration (info level, JSON format)
-	defaultLoggerCfg := logging.LogConfig{
+	defaultLoggerCfg := logging_adapters.LogConfig{
 		Level:  "info",
 		Format: "json",
 	}
-	var log ports.Logger
-	log, err := logging.New(defaultLoggerCfg)
+	var log logging_ports.Logger
+	log, err := logging_adapters.New(defaultLoggerCfg)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize logger: %v\n", err)
 		os.Exit(1)
 	}
 	defer func() {
 		if err := log.Sync(); err != nil {
-			log.Error("Failed to sync logger", ports.Field{Key: "error", Value: err})
+			log.Error("Failed to sync logger", logging_ports.Field{Key: "error", Value: err})
 		}
 	}()
 
-	fmt.Println(*configPath)
-	_, err = config.Load(*configPath)
-
+	var loader config_ports.Loader
+	loader = config_adapters.NewViperLoader(*configPath)
+	// load config
+	// cfg, err := loader.Load()
+	_, err = loader.Load()
 	if err != nil {
-		fmt.Println("mahdi", err)
+		log.Fatal("❌ failed to load config", logging_ports.Field{Key: "error", Value: err})
 	}
+	// fmt.Printf("%+v\n", cfg)
 
 	// Example log messages to verify logger functionality
-	log.Info("Logger initialized successfully", ports.Field{Key: "app", Value: "mlb-controller"})
-	log.Debug("This is a debug message", ports.Field{Key: "version", Value: 1})
+	log.Info("Logger initialized successfully", logging_ports.Field{Key: "app", Value: "mlb-controller"})
+	log.Debug("This is a debug message", logging_ports.Field{Key: "version", Value: 1})
 }
