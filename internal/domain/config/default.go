@@ -4,6 +4,14 @@ import "time"
 
 // ApplyDefaultValues sets default values for the configuration.
 func ApplyDefaultValues(cfg *Config) {
+	// Initialize nil slices to empty slices
+	if cfg.LoadBalancers.Nginx == nil {
+		cfg.LoadBalancers.Nginx = []NginxConfig{}
+	}
+	if cfg.LoadBalancers.Envoy == nil {
+		cfg.LoadBalancers.Envoy = []EnvoyConfig{}
+	}
+
 	if cfg.GlobalUpstreamSyncPeriod == 0 {
 		cfg.GlobalUpstreamSyncPeriod = 10 * time.Second
 	}
