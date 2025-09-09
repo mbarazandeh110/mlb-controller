@@ -69,8 +69,8 @@ loadbalancers:
             target: 172.30.23.0 # must be a valid IP
             mask: 25 # must be between 0 and 32
         ips:
-          - source: 172.16.21.4 # must be a valid IP, source ips must be uniqe (172.16.21.1, 172.20.21.3 from lb2 and 172.16.21.4)
-            target: 172.20.21.2 # must be a valid IP
+          - source: 172.16.21.4 # must be a valid IP, source ips must be uniqe (172.16.21.1, 172.20.21.2 from lb2 and 172.16.21.4)
+            target: 172.20.22.4 # must be a valid IP
         global_nets:
           - cdn1 # must be exist in global_ip_replacement_list.net
         global_ips:
