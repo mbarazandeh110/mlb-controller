@@ -34,6 +34,9 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
+	// Apply default values before validation
+	domain.ApplyDefaultValues(cfg)
+
 	if err := l.validator.Validate(cfg); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}

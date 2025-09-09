@@ -1,12 +1,9 @@
-package validator
+package config
 
-import (
-	domain "mlb-controller/internal/domain/config"
-	"time"
-)
+import "time"
 
-// applyDefaultValues sets default values for the configuration.
-func applyDefaultValues(cfg *domain.Config) {
+// ApplyDefaultValues sets default values for the configuration.
+func ApplyDefaultValues(cfg *Config) {
 	if cfg.GlobalUpstreamSyncPeriod == 0 {
 		cfg.GlobalUpstreamSyncPeriod = 10 * time.Second
 	}

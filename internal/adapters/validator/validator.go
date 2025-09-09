@@ -32,7 +32,7 @@ func NewCompositeValidator() *CompositeValidator {
 // Validate runs all registered validators.
 func (cv *CompositeValidator) Validate(cfg *domain.Config) error {
 	// Apply default values
-	applyDefaultValues(cfg)
+	domain.ApplyDefaultValues(cfg)
 
 	for _, v := range cv.validators {
 		if err := v.Validate(cfg); err != nil {
