@@ -2,9 +2,9 @@ package validator
 
 import (
 	"fmt"
-
-	domain "mlb-controller/internal/domain/config"
+	"mlb-controller/internal/domain/config"
 	config_ports "mlb-controller/internal/ports/config"
+	"mlb-controller/internal/util"
 )
 
 // CompositeValidator aggregates multiple validators.
@@ -30,9 +30,9 @@ func NewCompositeValidator() *CompositeValidator {
 }
 
 // Validate runs all registered validators.
-func (cv *CompositeValidator) Validate(cfg *domain.Config) error {
+func (cv *CompositeValidator) Validate(cfg *config.Config) error {
 	// Apply default values
-	domain.ApplyDefaultValues(cfg)
+	config.ApplyDefaultValues(cfg)
 
 	for _, v := range cv.validators {
 		if err := v.Validate(cfg); err != nil {
@@ -45,7 +45,7 @@ func (cv *CompositeValidator) Validate(cfg *domain.Config) error {
 // GlobalConfigValidator validates global configuration settings.
 type GlobalConfigValidator struct{}
 
-func (v *GlobalConfigValidator) Validate(cfg *domain.Config) error {
+func (v *GlobalConfigValidator) Validate(cfg *config.Config) error {
 	if cfg.GlobalUpstreamSyncPeriod < 0 {
 		return fmt.Errorf("global_upstream_sync_period must be non-negative")
 	}
@@ -55,7 +55,7 @@ func (v *GlobalConfigValidator) Validate(cfg *domain.Config) error {
 // LeaderElectionValidator validates leader election configuration.
 type LeaderElectionValidator struct{}
 
-func (v *LeaderElectionValidator) Validate(cfg *domain.Config) error {
+func (v *LeaderElectionValidator) Validate(cfg *config.Config) error {
 	if !cfg.LeaderElection.Enabled {
 		return nil
 	}
@@ -80,7 +80,7 @@ func (v *LeaderElectionValidator) Validate(cfg *domain.Config) error {
 // LoadBalancersValidator validates Nginx and Envoy configurations.
 type LoadBalancersValidator struct{}
 
-func (v *LoadBalancersValidator) Validate(cfg *domain.Config) error {
+func (v *LoadBalancersValidator) Validate(cfg *config.Config) error {
 	// Validate unique names across all load balancers
 	names := make(map[string]struct{})
 	for _, lb := range cfg.LoadBalancers.Nginx {
@@ -120,73 +120,30 @@ func (v *LoadBalancersValidator) Validate(cfg *domain.Config) error {
 }
 
 // Helper function to validate a load balancer configuration
-func validateLoadBalancer(lb domain.LoadBalancerConfig, globalList domain.GlobalIPReplacementList) error {
+func validateLoadBalancer(lb config.LoadBalancerConfig, globalList config.GlobalIPReplacementList) error {
 	// Validate addresses
 	for _, addr := range lb.GetAddresses() {
-		if !isValidIP(addr.IP) {
+		if !util.IsValidIP(addr.IP) {
 			return fmt.Errorf("invalid IP in addresses: %s", addr.IP)
 		}
-		if addr.Port < 0 || addr.Port > 65535 {
+		if !util.IsValidPort(addr.Port) {
 			return fmt.Errorf("port must be between 0 and 65535: %d", addr.Port)
 		}
-		if !isValidProtocol(addr.Protocol) {
+		if !util.IsValidProtocol(addr.Protocol) {
 			return fmt.Errorf("protocol must be one of: http, https, grpc; got: %s", addr.Protocol)
 		}
 		if addr.Protocol == "https" && addr.Hostname == "" {
 			return fmt.Errorf("hostname is required for https protocol")
 		}
-		if addr.Hostname != "" && !isValidDomain(addr.Hostname) {
+		if addr.Hostname != "" && !util.IsValidDomain(addr.Hostname) {
 			return fmt.Errorf("invalid hostname: %s", addr.Hostname)
 		}
 	}
 
 	// Validate IP replacement list
 	if lb.GetIPReplacement() {
-		sourceNets := make(map[string]struct{})
-		for _, net := range lb.GetIPReplacementList().Nets {
-			if !isValidIP(net.Source) || !isValidIP(net.Target) {
-				return fmt.Errorf("invalid IP in ip_replacement_list.nets: source=%s, target=%s", net.Source, net.Target)
-			}
-			if net.Mask < 0 || net.Mask > 32 {
-				return fmt.Errorf("ip_replacement_list.nets.mask must be between 0 and 32")
-			}
-			sourceNet := fmt.Sprintf("%s/%d", net.Source, net.Mask)
-			if _, exists := sourceNets[sourceNet]; exists {
-				return fmt.Errorf("ip_replacement_list.nets source '%s' must not overlap", sourceNet)
-			}
-			sourceNets[sourceNet] = struct{}{}
-		}
-
-		sourceIPs := make(map[string]struct{})
-		for _, ip := range lb.GetIPReplacementList().IPs {
-			if !isValidIP(ip.Source) || !isValidIP(ip.Target) {
-				return fmt.Errorf("invalid IP in ip_replacement_list.ips: source=%s, target=%s", ip.Source, ip.Target)
-			}
-			if _, exists := sourceIPs[ip.Source]; exists {
-				return fmt.Errorf("ip_replacement_list.ips source '%s' must be unique", ip.Source)
-			}
-			sourceIPs[ip.Source] = struct{}{}
-		}
-
-		// Validate global references
-		globalNetNames := make(map[string]struct{})
-		for _, net := range globalList.Net {
-			globalNetNames[net.Name] = struct{}{}
-		}
-		for _, name := range lb.GetIPReplacementList().GlobalNets {
-			if _, exists := globalNetNames[name]; !exists {
-				return fmt.Errorf("global_nets '%s' does not exist in global_ip_replacement_list.net", name)
-			}
-		}
-
-		globalIPNames := make(map[string]struct{})
-		for _, ip := range globalList.IP {
-			globalIPNames[ip.Name] = struct{}{}
-		}
-		for _, name := range lb.GetIPReplacementList().GlobalIPs {
-			if _, exists := globalIPNames[name]; !exists {
-				return fmt.Errorf("global_ips '%s' does not exist in global_ip_replacement_list.ip", name)
-			}
+		if err := util.ValidateIPReplacementList(lb.GetIPReplacementList(), globalList); err != nil {
+			return err
 		}
 	}
 
