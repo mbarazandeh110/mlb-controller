@@ -2,17 +2,23 @@ package config
 
 import (
 	"fmt"
+	validator "mlb-controller/internal/adapters/validator"
 	domain "mlb-controller/internal/domain/config"
+	config_ports "mlb-controller/internal/ports/config"
 
 	"github.com/spf13/viper"
 )
 
 type ViperLoader struct {
-	path string
+	path      string
+	validator config_ports.Validator
 }
 
 func NewViperLoader(path string) *ViperLoader {
-	return &ViperLoader{path: path}
+	return &ViperLoader{
+		path:      path,
+		validator: validator.NewCompositeValidator(),
+	}
 }
 
 func (l *ViperLoader) Load() (*domain.Config, error) {
@@ -28,7 +34,7 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 		return nil, fmt.Errorf("unmarshal config: %w", err)
 	}
 
-	if err := cfg.Validate(); err != nil {
+	if err := l.validator.Validate(cfg); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
 	}
 

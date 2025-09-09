@@ -116,7 +116,7 @@ loadbalancers:
             target: 172.30.23.0 # must be a valid IP
             mask: 24 # must be between 0 and 32
         ips:
-          - source: 172.16.21.1 # must be a valid IP
+          - source: 172.16.21.3 # must be a valid IP
             target: 172.20.21.2 # must be a valid IP
         global_nets:
           - cdn1
