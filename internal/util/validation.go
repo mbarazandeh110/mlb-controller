@@ -19,6 +19,9 @@ func IsValidProtocol(protocol string) bool {
 
 // IsValidDomain checks if the given hostname is a valid domain name.
 func IsValidDomain(hostname string) bool {
+	if hostname == "" {
+		return false
+	}
 	domainRegex := regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$`)
 	return domainRegex.MatchString(hostname)
 }
