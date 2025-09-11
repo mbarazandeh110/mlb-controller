@@ -35,10 +35,10 @@ global_ip_replacement_list:
       nets:
         - source: 172.16.20.0 # must be a valid IP, and all sources nets can not have overlap
           target: 172.30.20.0 # must be a valid IP
-          mask: 25 # must be between 0 and 32
-        - source: 172.16.20.0 # must be a valid IP, and all sources nets can not have overlap for example (172.16.20.0/24, 172.16.22.0/24)
-          target: 172.30.22.0 # must be a valid IP
           mask: 24 # must be between 0 and 32
+        - source: 172.16.121.0 # must be a valid IP, and all sources nets can not have overlap for example (172.16.20.0/24, 172.16.22.0/24)
+          target: 172.30.22.0 # must be a valid IP
+          mask: 23 # must be between 0 and 32
     - name: internal # must be unique
       nets:
         - source: 172.17.20.0 # must be a valid IP
