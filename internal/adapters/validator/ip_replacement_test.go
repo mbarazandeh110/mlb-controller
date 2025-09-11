@@ -127,7 +127,7 @@ func TestGlobalIPReplacementValidator_Validate(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "global_ip_replacement_list.net source '192.168.1.0/24' must not overlap",
+			errorMsg:    "global_ip_replacement_list.net source '192.168.1.0/24' and '192.168.1.0/24' have overlap",
 		},
 		{
 			name: "Empty IP Name",
