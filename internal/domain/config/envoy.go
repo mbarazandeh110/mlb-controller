@@ -18,3 +18,13 @@ func (c EnvoyConfig) GetAddresses() []AddressConfig           { return c.Address
 func (c EnvoyConfig) GetIPReplacement() bool                  { return c.IPReplacement }
 func (c EnvoyConfig) GetIPReplacementList() IPReplacementList { return c.IPReplacementList }
 func (c EnvoyConfig) GetType() string                         { return c.Type }
+
+func (c EnvoyConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration) LoadBalancerConfig {
+	if c.UpstreamSyncPeriod == 0 {
+		c.UpstreamSyncPeriod = globalUpstreamSyncPeriod
+	}
+	if c.RequestTimeout == 0 {
+		c.RequestTimeout = 30 * time.Second
+	}
+	return c
+}

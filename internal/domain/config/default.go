@@ -9,6 +9,7 @@ func ApplyDefaultValues(cfg *Config) {
 		cfg.LoadBalancers.LoadBalancers = []LoadBalancerConfig{}
 	}
 
+	// Set global defaults
 	if cfg.GlobalUpstreamSyncPeriod == 0 {
 		cfg.GlobalUpstreamSyncPeriod = 10 * time.Second
 	}
@@ -37,27 +38,8 @@ func ApplyDefaultValues(cfg *Config) {
 		cfg.Kubernetes.ResyncPeriod = 30 * time.Second
 	}
 
+	// Apply defaults for each load balancer
 	for i, lb := range cfg.LoadBalancers.LoadBalancers {
-		switch v := lb.(type) {
-		case NginxConfig:
-			if v.UpstreamSyncPeriod == 0 {
-				v.UpstreamSyncPeriod = cfg.GlobalUpstreamSyncPeriod
-			}
-			if v.FailTimeout == 0 {
-				v.FailTimeout = 60 * time.Second
-			}
-			if v.RequestTimeout == 0 {
-				v.RequestTimeout = 30 * time.Second
-			}
-			cfg.LoadBalancers.LoadBalancers[i] = v
-		case EnvoyConfig:
-			if v.UpstreamSyncPeriod == 0 {
-				v.UpstreamSyncPeriod = cfg.GlobalUpstreamSyncPeriod
-			}
-			if v.RequestTimeout == 0 {
-				v.RequestTimeout = 30 * time.Second
-			}
-			cfg.LoadBalancers.LoadBalancers[i] = v
-		}
+		cfg.LoadBalancers.LoadBalancers[i] = lb.SetDefaults(cfg.GlobalUpstreamSyncPeriod)
 	}
 }

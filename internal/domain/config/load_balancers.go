@@ -1,5 +1,7 @@
 package config
 
+import "time"
+
 // LoadBalancersConfig defines configurations for all load balancers.
 type LoadBalancersConfig struct {
 	LoadBalancers []LoadBalancerConfig `mapstructure:"loadbalancers"`
@@ -12,6 +14,7 @@ type LoadBalancerConfig interface {
 	GetIPReplacement() bool
 	GetIPReplacementList() IPReplacementList
 	GetType() string
+	SetDefaults(globalUpstreamSyncPeriod time.Duration) LoadBalancerConfig
 }
 
 // AddressConfig defines an address for a load balancer.

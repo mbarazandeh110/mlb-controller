@@ -22,3 +22,16 @@ func (c NginxConfig) GetAddresses() []AddressConfig           { return c.Address
 func (c NginxConfig) GetIPReplacement() bool                  { return c.IPReplacement }
 func (c NginxConfig) GetIPReplacementList() IPReplacementList { return c.IPReplacementList }
 func (c NginxConfig) GetType() string                         { return c.Type }
+
+func (c NginxConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration) LoadBalancerConfig {
+	if c.UpstreamSyncPeriod == 0 {
+		c.UpstreamSyncPeriod = globalUpstreamSyncPeriod
+	}
+	if c.FailTimeout == 0 {
+		c.FailTimeout = 60 * time.Second
+	}
+	if c.RequestTimeout == 0 {
+		c.RequestTimeout = 30 * time.Second
+	}
+	return c
+}
