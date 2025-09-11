@@ -46,19 +46,22 @@ func IsNetworkOverlap(ip1 string, mask1 int, ip2 string, mask2 int) bool {
 
 // ValidateIPReplacementList validates IP and network replacement lists.
 func ValidateIPReplacementList(list config.IPReplacementList, globalList config.GlobalIPReplacementList) error {
-	sourceNets := make(map[string]struct{})
-	for _, net := range list.Nets {
+	for i, net := range list.Nets {
 		if !IsValidIP(net.Source) || !IsValidIP(net.Target) {
 			return fmt.Errorf("invalid IP in nets: source=%s, target=%s", net.Source, net.Target)
 		}
 		if net.Mask < 0 || net.Mask > 32 {
 			return fmt.Errorf("nets.mask must be between 0 and 32")
 		}
-		sourceNet := fmt.Sprintf("%s/%d", net.Source, net.Mask)
-		if _, exists := sourceNets[sourceNet]; exists {
-			return fmt.Errorf("nets source '%s' must not overlap", sourceNet)
+		for j, net2 := range list.Nets {
+			if i == j {
+				continue
+			}
+			if IsNetworkOverlap(net.Source, net.Mask, net2.Source, net2.Mask) {
+				return fmt.Errorf("nets.net source '%s/%d' and '%s/%d' must not overlap", net.Source, net.Mask, net2.Source, net2.Mask)
+			}
 		}
-		sourceNets[sourceNet] = struct{}{}
+
 	}
 
 	sourceIPs := make(map[string]struct{})
