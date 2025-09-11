@@ -35,8 +35,8 @@ global_ip_replacement_list:
       nets:
         - source: 172.16.20.0 # must be a valid IP, and all sources nets can not have overlap
           target: 172.30.20.0 # must be a valid IP
-          mask: 24 # must be between 0 and 32
-        - source: 172.16.22.0 # must be a valid IP, and all sources nets can not have overlap for example (172.16.20.0/24, 172.16.22.0/24)
+          mask: 25 # must be between 0 and 32
+        - source: 172.16.20.0 # must be a valid IP, and all sources nets can not have overlap for example (172.16.20.0/24, 172.16.22.0/24)
           target: 172.30.22.0 # must be a valid IP
           mask: 24 # must be between 0 and 32
     - name: internal # must be unique
@@ -59,86 +59,88 @@ global_ip_replacement_list:
 
 # Load balancer configurations for Nginx and Envoy
 loadbalancers:
-  nginx:
-    - name: CDN # must be unique across all load balancers
-      ip_replacement: true # default false
-      update_period: 1s # default 1s
-      ip_replacement_list:
-        nets:
-          - source: 172.16.27.0 # must be a valid IP and all sources nets can not have overlap for example (172.16.20.0/24 and 172.16.22.0/24 from cdn1 and 172.16.27.0/24)
-            target: 172.30.23.0 # must be a valid IP
-            mask: 25 # must be between 0 and 32
-        ips:
-          - source: 172.16.21.4 # must be a valid IP, source ips must be uniqe (172.16.21.1, 172.20.21.2 from lb2 and 172.16.21.4)
-            target: 172.20.22.4 # must be a valid IP
-        global_nets:
-          - cdn1 # must be exist in global_ip_replacement_list.net
-        global_ips:
-          - lb2 # must be exist in global_ip_replacement_list.ip
-      addresses:
-        - protocol: http
-          ip: 1.2.3.4 # must be a valid IP
-          port: 80 # betwenn 0 and 65535
-          hostname: 'test.com' # must be a valid domain name and required for https
-        - protocol: https
-          ip: 2.3.4.5 # must be a valid IP
-          port: 55 # betwenn 0 and 65535
-          hostname: 'test.com' # required for https
-      list_api: /api/upstream
-      upstream_sync_period: 1s # default is global_upstream_sync_period (3s)
-      add_api: /dynamic
-      remove_api: /dynamic
-      fail_timeout: 60s # default 60s
-      request_timeout: 10s # default 30s
-    - name: localCDN # must be unique across all load balancers
-      ip_replacement: true
-      ip_replacement_list:
-        global_nets:
-          - internal
-      addresses:
-        - protocol: http
-          ip: 6.2.3.4 # must be a valid IP
-          port: 82 # betwenn 0 and 65535
-          hostname: 'test.com'
-        - protocol: http
-          ip: 6.3.4.5 # must be a valid IP
-          port: 59 # betwenn 0 and 65535
-          hostname: 'test.com'
-      list_api: /api/upstream
-      add_api: /dynamic
-      remove_api: /dynamic
-  envoy:
-    - name: LoadBalancer1 # must be unique across all load balancers
-      ip_replacement: true # default false
-      ip_replacement_list:
-        nets:
-          - source: 172.16.23.0 # must be a valid IP
-            target: 172.30.23.0 # must be a valid IP
-            mask: 24 # must be between 0 and 32
-        ips:
-          - source: 172.16.21.3 # must be a valid IP
-            target: 172.20.21.2 # must be a valid IP
-        global_nets:
-          - cdn1
-        global_ips:
-          - lb2
-      addresses:
-        - protocol: grpc
-          ip: 1.2.3.41 # must be a valid IP
-          port: 81 # betwenn 0 and 65535
-          hostname: 'test.com'
-        - protocol: grpc
-          ip: 2.3.4.56 # must be a valid IP
-          port: 56 # betwenn 0 and 65535
-          hostname: example.com # required for https
-      upstream_sync_period: 2s # default is global_upstream_sync_period (3s)
-      request_timeout: 10s # default 30s
-    - name: localLB # must be unique across all load balancers
-      addresses:
-        - protocol: http
-          ip: 6.2.3.45 # must be a valid IP
-          port: 80 # betwenn 0 and 65535
-        - protocol: https
-          ip: 6.3.4.56 # must be a valid IP
-          port: 56 # betwenn 0 and 65535
-          hostname: 'example.com' # require is protocol is https
+  - type: nginx
+    name: CDN # must be unique across all load balancers
+    ip_replacement: true # default false
+    update_period: 1s # default 1s
+    ip_replacement_list:
+      nets:
+        - source: 172.16.27.0 # must be a valid IP and all sources nets can not have overlap for example (172.16.20.0/24 and 172.16.22.0/24 from cdn1 and 172.16.27.0/24)
+          target: 172.30.23.0 # must be a valid IP
+          mask: 25 # must be between 0 and 32
+      ips:
+        - source: 172.16.21.4 # must be a valid IP, source ips must be uniqe (172.16.21.1, 172.20.21.2 from lb2 and 172.16.21.4)
+          target: 172.20.22.4 # must be a valid IP
+      global_nets:
+        - cdn1 # must be exist in global_ip_replacement_list.net
+      global_ips:
+        - lb2 # must be exist in global_ip_replacement_list.ip
+    addresses:
+      - protocol: http
+        ip: 1.2.3.4 # must be a valid IP
+        port: 80 # betwenn 0 and 65535
+        hostname: 'test.com' # must be a valid domain name and required for https
+      - protocol: https
+        ip: 2.3.4.5 # must be a valid IP
+        port: 55 # betwenn 0 and 65535
+        hostname: 'test.com' # required for https
+    list_api: /api/upstream
+    upstream_sync_period: 1s # default is global_upstream_sync_period (3s)
+    add_api: /dynamic
+    remove_api: /dynamic
+    fail_timeout: 60s # default 60s
+    request_timeout: 10s # default 30s
+  - type: nginx
+    name: localCDN # must be unique across all load balancers
+    ip_replacement: true
+    ip_replacement_list:
+      global_nets:
+        - internal
+    addresses:
+      - protocol: http
+        ip: 6.2.3.4 # must be a valid IP
+        port: 82 # betwenn 0 and 65535
+        hostname: 'test.com'
+      - protocol: http
+        ip: 6.3.4.5 # must be a valid IP
+        port: 59 # betwenn 0 and 65535
+        hostname: 'test.com'
+    list_api: /api/upstream
+    add_api: /dynamic
+    remove_api: /dynamic
+  - type: envoy
+    name: LoadBalancer1 # must be unique across all load balancers
+    ip_replacement: true # default false
+    ip_replacement_list:
+      nets:
+        - source: 172.16.23.0 # must be a valid IP
+          target: 172.30.23.0 # must be a valid IP
+          mask: 24 # must be between 0 and 32
+      ips:
+        - source: 172.16.21.3 # must be a valid IP
+          target: 172.20.21.2 # must be a valid IP
+      global_nets:
+        - cdn1
+      global_ips:
+        - lb2
+    addresses:
+      - protocol: grpc
+        ip: 1.2.3.41 # must be a valid IP
+        port: 81 # betwenn 0 and 65535
+        hostname: 'test.com'
+      - protocol: grpc
+        ip: 2.3.4.56 # must be a valid IP
+        port: 56 # betwenn 0 and 65535
+        hostname: example.com # required for https
+    upstream_sync_period: 2s # default is global_upstream_sync_period (3s)
+    request_timeout: 10s # default 30s
+  - type: envoy
+    name: localLB # must be unique across all load balancers
+    addresses:
+      - protocol: http
+        ip: 6.2.3.45 # must be a valid IP
+        port: 80 # betwenn 0 and 65535
+      - protocol: https
+        ip: 6.3.4.56 # must be a valid IP
+        port: 56 # betwenn 0 and 65535
+        hostname: 'example.com' # require is protocol is https

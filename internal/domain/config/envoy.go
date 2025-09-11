@@ -4,6 +4,7 @@ import "time"
 
 // EnvoyConfig defines configuration for an Envoy load balancer.
 type EnvoyConfig struct {
+	Type               string            `mapstructure:"type"` // must be "envoy"
 	Name               string            `mapstructure:"name"`
 	IPReplacement      bool              `mapstructure:"ip_replacement"`
 	IPReplacementList  IPReplacementList `mapstructure:"ip_replacement_list"`
@@ -16,3 +17,4 @@ func (c EnvoyConfig) GetName() string                         { return c.Name }
 func (c EnvoyConfig) GetAddresses() []AddressConfig           { return c.Addresses }
 func (c EnvoyConfig) GetIPReplacement() bool                  { return c.IPReplacement }
 func (c EnvoyConfig) GetIPReplacementList() IPReplacementList { return c.IPReplacementList }
+func (c EnvoyConfig) GetType() string                         { return c.Type }

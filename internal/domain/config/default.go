@@ -5,11 +5,8 @@ import "time"
 // ApplyDefaultValues sets default values for the configuration.
 func ApplyDefaultValues(cfg *Config) {
 	// Initialize nil slices to empty slices
-	if cfg.LoadBalancers.Nginx == nil {
-		cfg.LoadBalancers.Nginx = []NginxConfig{}
-	}
-	if cfg.LoadBalancers.Envoy == nil {
-		cfg.LoadBalancers.Envoy = []EnvoyConfig{}
+	if cfg.LoadBalancers.LoadBalancers == nil {
+		cfg.LoadBalancers.LoadBalancers = []LoadBalancerConfig{}
 	}
 
 	if cfg.GlobalUpstreamSyncPeriod == 0 {
@@ -39,23 +36,28 @@ func ApplyDefaultValues(cfg *Config) {
 	if cfg.Kubernetes.ResyncPeriod == 0 {
 		cfg.Kubernetes.ResyncPeriod = 30 * time.Second
 	}
-	for i := range cfg.LoadBalancers.Nginx {
-		if cfg.LoadBalancers.Nginx[i].UpstreamSyncPeriod == 0 {
-			cfg.LoadBalancers.Nginx[i].UpstreamSyncPeriod = cfg.GlobalUpstreamSyncPeriod
-		}
-		if cfg.LoadBalancers.Nginx[i].FailTimeout == 0 {
-			cfg.LoadBalancers.Nginx[i].FailTimeout = 60 * time.Second
-		}
-		if cfg.LoadBalancers.Nginx[i].RequestTimeout == 0 {
-			cfg.LoadBalancers.Nginx[i].RequestTimeout = 30 * time.Second
-		}
-	}
-	for i := range cfg.LoadBalancers.Envoy {
-		if cfg.LoadBalancers.Envoy[i].UpstreamSyncPeriod == 0 {
-			cfg.LoadBalancers.Envoy[i].UpstreamSyncPeriod = cfg.GlobalUpstreamSyncPeriod
-		}
-		if cfg.LoadBalancers.Envoy[i].RequestTimeout == 0 {
-			cfg.LoadBalancers.Envoy[i].RequestTimeout = 30 * time.Second
+
+	for i, lb := range cfg.LoadBalancers.LoadBalancers {
+		switch v := lb.(type) {
+		case NginxConfig:
+			if v.UpstreamSyncPeriod == 0 {
+				v.UpstreamSyncPeriod = cfg.GlobalUpstreamSyncPeriod
+			}
+			if v.FailTimeout == 0 {
+				v.FailTimeout = 60 * time.Second
+			}
+			if v.RequestTimeout == 0 {
+				v.RequestTimeout = 30 * time.Second
+			}
+			cfg.LoadBalancers.LoadBalancers[i] = v
+		case EnvoyConfig:
+			if v.UpstreamSyncPeriod == 0 {
+				v.UpstreamSyncPeriod = cfg.GlobalUpstreamSyncPeriod
+			}
+			if v.RequestTimeout == 0 {
+				v.RequestTimeout = 30 * time.Second
+			}
+			cfg.LoadBalancers.LoadBalancers[i] = v
 		}
 	}
 }

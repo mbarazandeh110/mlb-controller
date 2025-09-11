@@ -6,102 +6,87 @@ import (
 	"mlb-controller/internal/util"
 )
 
-// LoadBalancerValidator validates common properties of load balancer configurations.
+// LoadBalancerValidator validates general load balancer configuration.
 type LoadBalancerValidator struct{}
 
 func (v *LoadBalancerValidator) Validate(cfg *config.Config) error {
-	// Validate unique names across all load balancers
 	names := make(map[string]struct{})
-	for _, lb := range cfg.LoadBalancers.Nginx {
-		if lb.Name == "" {
-			return fmt.Errorf("loadbalancers.nginx.name is required")
+	for _, lb := range cfg.LoadBalancers.LoadBalancers {
+		name := lb.GetName()
+		if name == "" {
+			return fmt.Errorf("loadbalancers.%s.name is required", lb.GetType())
 		}
-		if _, exists := names[lb.Name]; exists {
-			return fmt.Errorf("loadbalancers.nginx.name '%s' must be unique", lb.Name)
+		if _, exists := names[name]; exists {
+			return fmt.Errorf("loadbalancers.%s.name '%s' must be unique across all loadbalancers", lb.GetType(), name)
 		}
-		names[lb.Name] = struct{}{}
-	}
-	for _, lb := range cfg.LoadBalancers.Envoy {
-		if lb.Name == "" {
-			return fmt.Errorf("loadbalancers.envoy.name is required")
-		}
-		if _, exists := names[lb.Name]; exists {
-			return fmt.Errorf("loadbalancers.envoy.name '%s' must be unique", lb.Name)
-		}
-		names[lb.Name] = struct{}{}
-	}
+		names[name] = struct{}{}
 
-	// Validate Nginx load balancers
-	for _, lb := range cfg.LoadBalancers.Nginx {
-		if err := v.validateLoadBalancer(lb, cfg.GlobalIPReplacementList); err != nil {
-			return fmt.Errorf("loadbalancers.nginx '%s': %w", lb.Name, err)
-		}
-	}
-
-	// Validate Envoy load balancers
-	for _, lb := range cfg.LoadBalancers.Envoy {
-		if err := v.validateLoadBalancer(lb, cfg.GlobalIPReplacementList); err != nil {
-			return fmt.Errorf("loadbalancers.envoy '%s': %w", lb.Name, err)
-		}
-	}
-
-	return nil
-}
-
-func (v *LoadBalancerValidator) validateLoadBalancer(lb config.LoadBalancerConfig, globalList config.GlobalIPReplacementList) error {
-	// Validate addresses
-	for _, addr := range lb.GetAddresses() {
-		if !util.IsValidIP(addr.IP) {
-			return fmt.Errorf("invalid IP in addresses: %s", addr.IP)
-		}
-		if !util.IsValidPort(addr.Port) {
-			return fmt.Errorf("port must be between 0 and 65535: %d", addr.Port)
-		}
-		if !util.IsValidProtocol(addr.Protocol) {
-			return fmt.Errorf("protocol must be one of: http, https, grpc; got: %s", addr.Protocol)
-		}
-		if addr.Protocol == "https" && addr.Hostname == "" {
-			return fmt.Errorf("hostname is required for https protocol")
-		}
-		if addr.Hostname != "" && !util.IsValidDomain(addr.Hostname) {
-			return fmt.Errorf("invalid hostname: %s", addr.Hostname)
-		}
-	}
-
-	// Validate IP replacement
-	if lb.GetIPReplacement() {
-		if err := util.ValidateIPReplacementList(lb.GetIPReplacementList(), globalList); err != nil {
+		// Validate addresses
+		if err := v.validateAddresses(lb.GetAddresses(), name, lb.GetType()); err != nil {
 			return err
 		}
 
-		// Check for overlap between nets and global_nets
-		for _, name := range lb.GetIPReplacementList().GlobalNets {
-			for _, net := range globalList.Net {
-				if net.Name != name {
-					continue
-				}
-				for _, globalNet := range net.Nets {
-					globalNetStr := fmt.Sprintf("%s/%d", globalNet.Source, globalNet.Mask)
-					for _, localNet := range lb.GetIPReplacementList().Nets {
-						localNetStr := fmt.Sprintf("%s/%d", localNet.Source, localNet.Mask)
-						if util.IsNetworkOverlap(globalNet.Source, globalNet.Mask, localNet.Source, localNet.Mask) {
-							return fmt.Errorf("network overlap detected: global_nets '%s' overlaps with nets '%s' in load balancer", globalNetStr, localNetStr)
+		// Validate IP replacement if enabled
+		if lb.GetIPReplacement() {
+			if err := v.validateIPReplacementList(lb.GetIPReplacementList(), cfg.GlobalIPReplacementList, name, lb.GetType()); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (v *LoadBalancerValidator) validateAddresses(addresses []config.AddressConfig, name, lbType string) error {
+	for _, addr := range addresses {
+		if !util.IsValidProtocol(addr.Protocol) {
+			return fmt.Errorf("loadbalancers.%s '%s': protocol must be one of: http, https, grpc; got: %s", lbType, name, addr.Protocol)
+		}
+		if !util.IsValidIP(addr.IP) {
+			return fmt.Errorf("loadbalancers.%s '%s': invalid IP in addresses: %s", lbType, name, addr.IP)
+		}
+		if !util.IsValidPort(addr.Port) {
+			return fmt.Errorf("loadbalancers.%s '%s': port must be between 0 and 65535: %d", lbType, name, addr.Port)
+		}
+		if addr.Protocol == "https" && !util.IsValidDomain(addr.Hostname) {
+			if addr.Hostname == "" {
+				return fmt.Errorf("loadbalancers.%s '%s': hostname is required for https protocol", lbType, name)
+			}
+			return fmt.Errorf("loadbalancers.%s '%s': invalid hostname: %s", lbType, name, addr.Hostname)
+		}
+		// if addr.Protocol == "https" && addr.Hostname == "" {
+		// 	return fmt.Errorf("loadbalancers.%s '%s': hostname is only allowed for https protocol (index %d)", lbType, name, i)
+		// }
+	}
+	return nil
+}
+
+func (v *LoadBalancerValidator) validateIPReplacementList(list config.IPReplacementList, globalList config.GlobalIPReplacementList, name, lbType string) error {
+	if err := util.ValidateIPReplacementList(list, globalList); err != nil {
+		return fmt.Errorf("loadbalancers.%s '%s': %w", lbType, name, err)
+	}
+
+	// Check for overlaps with global lists
+	for _, globalNetName := range list.GlobalNets {
+		for _, globalNet := range globalList.Net {
+			if globalNet.Name == globalNetName {
+				for _, gNet := range globalNet.Nets {
+					for _, lNet := range list.Nets {
+						if util.IsNetworkOverlap(gNet.Source, gNet.Mask, lNet.Source, lNet.Mask) {
+							return fmt.Errorf("network overlap detected: global_nets '%s/%d' overlaps with nets '%s/%d' in load balancer '%s'", gNet.Source, gNet.Mask, lNet.Source, lNet.Mask, name)
 						}
 					}
 				}
 			}
 		}
+	}
 
-		// Check for overlap between ips and global_ips
-		for _, name := range lb.GetIPReplacementList().GlobalIPs {
-			for _, ip := range globalList.IP {
-				if ip.Name != name {
-					continue
-				}
-				for _, globalIP := range ip.IPs {
-					for _, localIP := range lb.GetIPReplacementList().IPs {
-						if globalIP.Source == localIP.Source {
-							return fmt.Errorf("IP overlap detected: global_ips '%s' overlaps with ips '%s' in load balancer", globalIP.Source, localIP.Source)
+	for _, globalIPName := range list.GlobalIPs {
+		for _, globalIP := range globalList.IP {
+			if globalIP.Name == globalIPName {
+				for _, gIP := range globalIP.IPs {
+					for _, lIP := range list.IPs {
+						if gIP.Source == lIP.Source {
+							return fmt.Errorf("IP overlap detected: global_ips '%s' overlaps with ips '%s' in load balancer '%s'", gIP.Source, lIP.Source, name)
 						}
 					}
 				}

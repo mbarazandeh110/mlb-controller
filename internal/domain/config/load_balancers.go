@@ -1,9 +1,8 @@
 package config
 
-// LoadBalancersConfig defines configurations for Nginx and Envoy load balancers.
+// LoadBalancersConfig defines configurations for all load balancers.
 type LoadBalancersConfig struct {
-	Nginx []NginxConfig `mapstructure:"nginx"`
-	Envoy []EnvoyConfig `mapstructure:"envoy"`
+	LoadBalancers []LoadBalancerConfig `mapstructure:"loadbalancers"`
 }
 
 // LoadBalancerConfig defines the interface for load balancer configurations.
@@ -12,6 +11,7 @@ type LoadBalancerConfig interface {
 	GetAddresses() []AddressConfig
 	GetIPReplacement() bool
 	GetIPReplacementList() IPReplacementList
+	GetType() string
 }
 
 // AddressConfig defines an address for a load balancer.

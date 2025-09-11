@@ -9,9 +9,11 @@ import (
 type EnvoyValidator struct{}
 
 func (v *EnvoyValidator) Validate(cfg *config.Config) error {
-	for _, lb := range cfg.LoadBalancers.Envoy {
-		if err := v.validateEnvoyConfig(lb); err != nil {
-			return fmt.Errorf("envoy '%s': %w", lb.Name, err)
+	for _, lb := range cfg.LoadBalancers.LoadBalancers {
+		if envoy, ok := lb.(config.EnvoyConfig); ok {
+			if err := v.validateEnvoyConfig(envoy); err != nil {
+				return fmt.Errorf("envoy '%s': %w", envoy.Name, err)
+			}
 		}
 	}
 	return nil

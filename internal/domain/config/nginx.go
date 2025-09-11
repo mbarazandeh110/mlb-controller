@@ -4,6 +4,7 @@ import "time"
 
 // NginxConfig defines configuration for an Nginx load balancer.
 type NginxConfig struct {
+	Type               string            `mapstructure:"type"` // must be "nginx"
 	Name               string            `mapstructure:"name"`
 	IPReplacement      bool              `mapstructure:"ip_replacement"`
 	IPReplacementList  IPReplacementList `mapstructure:"ip_replacement_list"`
@@ -20,3 +21,4 @@ func (c NginxConfig) GetName() string                         { return c.Name }
 func (c NginxConfig) GetAddresses() []AddressConfig           { return c.Addresses }
 func (c NginxConfig) GetIPReplacement() bool                  { return c.IPReplacement }
 func (c NginxConfig) GetIPReplacementList() IPReplacementList { return c.IPReplacementList }
+func (c NginxConfig) GetType() string                         { return c.Type }

@@ -9,9 +9,11 @@ import (
 type NginxValidator struct{}
 
 func (v *NginxValidator) Validate(cfg *config.Config) error {
-	for _, lb := range cfg.LoadBalancers.Nginx {
-		if err := v.validateNginxConfig(lb); err != nil {
-			return fmt.Errorf("nginx '%s': %w", lb.Name, err)
+	for _, lb := range cfg.LoadBalancers.LoadBalancers {
+		if nginx, ok := lb.(config.NginxConfig); ok {
+			if err := v.validateNginxConfig(nginx); err != nil {
+				return fmt.Errorf("nginx '%s': %w", nginx.Name, err)
+			}
 		}
 	}
 	return nil
