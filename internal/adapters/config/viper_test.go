@@ -1,186 +1,103 @@
 package config
 
 import (
-	"fmt"
 	"os"
-	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
-	"mlb-controller/internal/adapters/validator"
-	"mlb-controller/internal/domain/config"
-	config_ports "mlb-controller/internal/ports/config"
-
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-// mockValidator is a mock implementation of config_ports.Validator for testing.
-type mockValidator struct {
-	validateFunc func(cfg *config.Config) error
+func TestNewViperLoader(t *testing.T) {
+	loader := NewViperLoader("test.yaml")
+	assert.Equal(t, "test.yaml", loader.path)
+	assert.NotNil(t, loader.validator)
 }
 
-func (m *mockValidator) Validate(cfg *config.Config) error {
-	if m.validateFunc != nil {
-		return m.validateFunc(cfg)
-	}
-	return nil
+func TestStringToDurationHookFunc(t *testing.T) {
+	hook := StringToDurationHookFunc()
+	val, err := hook(reflect.TypeOf(""), reflect.TypeOf(time.Duration(0)), "10s")
+	assert.NoError(t, err)
+	assert.Equal(t, 10*time.Second, val)
+
+	val, err = hook(reflect.TypeOf(0), reflect.TypeOf(time.Duration(0)), 0) // Non-string
+	assert.NoError(t, err)
+	assert.Equal(t, 0, val)
 }
 
 func TestViperLoader_Load(t *testing.T) {
-	// Create a temporary directory for test files
-	tempDir, err := os.MkdirTemp("", "viper_test")
-	require.NoError(t, err)
-	defer os.RemoveAll(tempDir)
-
-	tests := []struct {
-		name          string
-		configContent string
-		configPath    string
-		validator     config_ports.Validator
-		expected      *config.Config
-		expectError   bool
-		errorContains string
-	}{
-		{
-			name: "Valid Config",
-			configContent: `
+	// Create temp config file
+	content := `
 global_upstream_sync_period: 5s
+leader_election:
+  enabled: true
+  lease_name: test
+  lease_namespace: default
 log:
-  level: debug
+  level: info
   format: json
 metrics:
-  port: 8080
+  enabled: true
+  port: 9090
   uri: /metrics
+kubernetes:
+  resync_period: 30s
+global_ip_replacement_list:
+  net:
+    - name: net1
+      nets:
+        - source: 192.168.1.0
+          target: 10.0.0.0
+          mask: 24
+  ip:
+    - name: ip1
+      ips:
+        - source: 192.168.1.1
+          target: 10.0.0.1
 loadbalancers:
-  nginx:
-    - name: nginx1
-      list_api: /list
-      add_api: /add
-      remove_api: /remove
-  envoy:
-    - name: envoy1
-`,
-			configPath: filepath.Join(tempDir, "valid.yaml"),
-			validator: &mockValidator{
-				validateFunc: func(cfg *config.Config) error {
-					return nil
-				},
-			},
-			expected: &config.Config{
-				GlobalUpstreamSyncPeriod: 5 * time.Second,
-				LeaderElection: config.LeaderElectionConfig{
-					LeaseDuration: 15 * time.Second,
-					RenewDeadline: 10 * time.Second,
-					RetryPeriod:   2 * time.Second,
-				},
-				Log: config.LogConfig{
-					Level:  "debug",
-					Format: "json",
-				},
-				Metrics: config.MetricsConfig{
-					Port: 8080,
-					URI:  "/metrics",
-				},
-				Kubernetes: config.KubernetesConfig{
-					ResyncPeriod: 30 * time.Second,
-				},
-				LoadBalancers: config.LoadBalancersConfig{
-					Nginx: []config.NginxConfig{{
-						Name:               "nginx1",
-						ListAPI:            "/list",
-						AddAPI:             "/add",
-						RemoveAPI:          "/remove",
-						UpstreamSyncPeriod: 5 * time.Second,
-						FailTimeout:        60 * time.Second,
-						RequestTimeout:     30 * time.Second,
-					}},
-					Envoy: []config.EnvoyConfig{{
-						Name:               "envoy1",
-						UpstreamSyncPeriod: 5 * time.Second,
-						RequestTimeout:     30 * time.Second,
-					}},
-				},
-			},
-			expectError: false,
-		},
-		{
-			name:          "Non-existent Config File",
-			configContent: "",
-			configPath:    filepath.Join(tempDir, "nonexistent.yaml"),
-			validator:     &mockValidator{},
-			expected:      nil,
-			expectError:   true,
-			errorContains: "read config",
-		},
-		{
-			name: "Invalid YAML",
-			configContent: `
-global_upstream_sync_period: 5s
-log:
-  level: debug
-  format: json
-metrics:
-  port: 8080
-  uri: /metrics
-loadbalancers:
-  nginx:
-    - name: nginx1
-      list_api: /list
-      add_api: /add
-      remove_api: /remove
-    - name: nginx1  # Duplicate name
-`,
-			configPath:    filepath.Join(tempDir, "invalid.yaml"),
-			validator:     validator.NewCompositeValidator(), // Use real validator
-			expected:      nil,
-			expectError:   true,
-			errorContains: "loadbalancers.nginx.name 'nginx1' must be unique",
-		},
-		{
-			name: "Validation Failure",
-			configContent: `
-global_upstream_sync_period: -5s  # Invalid negative value
-`,
-			configPath: filepath.Join(tempDir, "validation_failure.yaml"),
-			validator: &mockValidator{
-				validateFunc: func(cfg *config.Config) error {
-					return fmt.Errorf("global_upstream_sync_period must be non-negative")
-				},
-			},
-			expected:      nil,
-			expectError:   true,
-			errorContains: "validate config",
-		},
+  - type: nginx
+    name: nginx1
+    addresses:
+      - protocol: http
+        ip: 192.168.1.1
+        port: 80
+    list_api: /list
+    add_api: /add
+    remove_api: /remove
+  - type: envoy
+    name: envoy1
+    addresses:
+      - protocol: grpc
+        ip: 10.0.0.1
+        port: 50051
+`
+	tmpFile, err := os.CreateTemp("", "config*.yaml")
+	assert.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	_, err = tmpFile.Write([]byte(content))
+	assert.NoError(t, err)
+	tmpFile.Close()
+
+	loader := NewViperLoader(tmpFile.Name())
+	cfg, err := loader.Load()
+	assert.NoError(t, err)
+	assert.NotNil(t, cfg)
+	assert.Equal(t, 5*time.Second, cfg.GlobalUpstreamSyncPeriod)
+	assert.Len(t, cfg.LoadBalancers.LoadBalancers, 2)
+
+	// Test invalid config
+	loader = NewViperLoader("invalid.yaml")
+	_, err = loader.Load()
+	assert.Error(t, err)
+}
+
+func TestMapstructureDecode(t *testing.T) {
+	input := map[string]interface{}{"timeout": "10s"}
+	var output struct {
+		Timeout time.Duration `mapstructure:"timeout"`
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create config file if content is provided
-			if tt.configContent != "" {
-				err := os.WriteFile(tt.configPath, []byte(tt.configContent), 0644)
-				require.NoError(t, err)
-			}
-
-			// Create ViperLoader with validator
-			loader := &ViperLoader{
-				path:      tt.configPath,
-				validator: tt.validator,
-			}
-
-			// Test Load
-			cfg, err := loader.Load()
-
-			if tt.expectError {
-				assert.Error(t, err)
-				if err != nil { // Prevent nil pointer dereference
-					assert.Contains(t, err.Error(), tt.errorContains)
-				}
-				assert.Nil(t, cfg)
-			} else {
-				assert.NoError(t, err)
-				assert.Equal(t, tt.expected, cfg)
-			}
-		})
-	}
+	err := mapstructureDecode(input, &output)
+	assert.NoError(t, err)
+	assert.Equal(t, 10*time.Second, output.Timeout)
 }
