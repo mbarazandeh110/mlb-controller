@@ -125,6 +125,51 @@ func TestLoadBalancerValidator_Validate(t *testing.T) {
 				},
 			},
 		}, true, "network overlap detected"},
+		{"Network Overlap with Global-4", &config.Config{
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					config.NginxConfig{
+						Type:          "nginx",
+						Name:          "nginx1",
+						IPReplacement: true,
+						IPReplacementList: config.IPReplacementList{
+							Nets: []config.NetConfig{{Source: "192.168.2.0", Target: "10.0.1.0", Mask: 24},
+								{Source: "192.168.2.0", Target: "10.0.1.0", Mask: 23}},
+						},
+					},
+				},
+			},
+		}, true, "loadbalancers.nginx 'nginx1': nets.net source '192.168.2.0/24' and '192.168.2.0/23' must not overlap"},
+		{"Network Overlap with Global-5", &config.Config{
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					config.NginxConfig{
+						Type:          "nginx",
+						Name:          "nginx1",
+						IPReplacement: true,
+						IPReplacementList: config.IPReplacementList{
+							Nets: []config.NetConfig{{Source: "192.168.2.0", Target: "10.0.1.0", Mask: 23},
+								{Source: "192.168.3.0", Target: "10.0.1.0", Mask: 24}},
+						},
+					},
+				},
+			},
+		}, true, "loadbalancers.nginx 'nginx1': nets.net source '192.168.2.0/23' and '192.168.3.0/24' must not overlap"},
+		{"Network Overlap with Global-6", &config.Config{
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					config.NginxConfig{
+						Type:          "nginx",
+						Name:          "nginx1",
+						IPReplacement: true,
+						IPReplacementList: config.IPReplacementList{
+							Nets: []config.NetConfig{{Source: "192.168.3.0", Target: "10.0.1.0", Mask: 24},
+								{Source: "192.168.2.0", Target: "10.0.1.0", Mask: 23}},
+						},
+					},
+				},
+			},
+		}, true, "loadbalancers.nginx 'nginx1': nets.net source '192.168.3.0/24' and '192.168.2.0/23' must not overlap"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

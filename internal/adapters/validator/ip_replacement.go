@@ -45,7 +45,7 @@ func (v *GlobalIPReplacementValidator) Validate(cfg *config.Config) error {
 					continue
 				}
 				if util.IsNetworkOverlap(n.Source, n.Mask, n2.Source, n2.Mask) {
-					return fmt.Errorf("global_ip_replacement_list.net source '%s/%d' and '%s/%d' have overlap", n.Source, n.Mask, n2.Source, n2.Mask)
+					return fmt.Errorf("global_ip_replacement_list.net source '%s/%d' and '%s/%d' must not overlap", n.Source, n.Mask, n2.Source, n2.Mask)
 				}
 			}
 		}

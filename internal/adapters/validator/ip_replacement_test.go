@@ -127,7 +127,7 @@ func TestGlobalIPReplacementValidator_Validate(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "global_ip_replacement_list.net source '192.168.1.0/24' and '192.168.1.0/24' have overlap",
+			errorMsg:    "global_ip_replacement_list.net source '192.168.1.0/24' and '192.168.1.0/24' must not overlap",
 		},
 		{
 			name: "Overlapping Nets-2",
@@ -145,7 +145,7 @@ func TestGlobalIPReplacementValidator_Validate(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "global_ip_replacement_list.net source '192.168.3.0/24' and '192.168.2.0/23' have overlap",
+			errorMsg:    "global_ip_replacement_list.net source '192.168.3.0/24' and '192.168.2.0/23' must not overlap",
 		},
 		{
 			name: "Overlapping Nets-3",
@@ -163,7 +163,7 @@ func TestGlobalIPReplacementValidator_Validate(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "global_ip_replacement_list.net source '192.168.2.0/23' and '192.168.3.0/24' have overlap",
+			errorMsg:    "global_ip_replacement_list.net source '192.168.2.0/23' and '192.168.3.0/24' must not overlap",
 		},
 		{
 			name: "Overlapping Nets-4",
@@ -181,7 +181,7 @@ func TestGlobalIPReplacementValidator_Validate(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "global_ip_replacement_list.net source '192.168.1.0/25' and '192.168.1.0/24' have overlap",
+			errorMsg:    "global_ip_replacement_list.net source '192.168.1.0/25' and '192.168.1.0/24' must not overlap",
 		},
 		{
 			name: "Empty IP Name",
