@@ -65,7 +65,7 @@ func TestLoadBalancerValidator_Validate(t *testing.T) {
 				},
 			},
 		}, true, "invalid IP"},
-		{"Network Overlap with Global", &config.Config{
+		{"Network Overlap with Global-1", &config.Config{
 			GlobalIPReplacementList: config.GlobalIPReplacementList{
 				Net: []config.GlobalNetReplacement{
 					{Name: "net1", Nets: []config.NetConfig{{Source: "192.168.1.0", Target: "10.0.0.0", Mask: 24}}},
@@ -80,6 +80,46 @@ func TestLoadBalancerValidator_Validate(t *testing.T) {
 						IPReplacementList: config.IPReplacementList{
 							GlobalNets: []string{"net1"},
 							Nets:       []config.NetConfig{{Source: "192.168.1.0", Target: "10.0.1.0", Mask: 24}},
+						},
+					},
+				},
+			},
+		}, true, "network overlap detected"},
+		{"Network Overlap with Global-2", &config.Config{
+			GlobalIPReplacementList: config.GlobalIPReplacementList{
+				Net: []config.GlobalNetReplacement{
+					{Name: "net1", Nets: []config.NetConfig{{Source: "192.168.2.0", Target: "10.0.0.0", Mask: 23}}},
+				},
+			},
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					config.NginxConfig{
+						Type:          "nginx",
+						Name:          "nginx1",
+						IPReplacement: true,
+						IPReplacementList: config.IPReplacementList{
+							GlobalNets: []string{"net1"},
+							Nets:       []config.NetConfig{{Source: "192.168.3.0", Target: "10.0.1.0", Mask: 24}},
+						},
+					},
+				},
+			},
+		}, true, "network overlap detected"},
+		{"Network Overlap with Global-3", &config.Config{
+			GlobalIPReplacementList: config.GlobalIPReplacementList{
+				Net: []config.GlobalNetReplacement{
+					{Name: "net1", Nets: []config.NetConfig{{Source: "192.168.3.0", Target: "10.0.0.0", Mask: 24}}},
+				},
+			},
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					config.NginxConfig{
+						Type:          "nginx",
+						Name:          "nginx1",
+						IPReplacement: true,
+						IPReplacementList: config.IPReplacementList{
+							GlobalNets: []string{"net1"},
+							Nets:       []config.NetConfig{{Source: "192.168.2.0", Target: "10.0.1.0", Mask: 23}},
 						},
 					},
 				},
