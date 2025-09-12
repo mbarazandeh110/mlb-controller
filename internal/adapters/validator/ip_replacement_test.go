@@ -112,7 +112,7 @@ func TestGlobalIPReplacementValidator_Validate(t *testing.T) {
 			errorMsg:    "global_ip_replacement_list.net.mask must be between 0 and 32",
 		},
 		{
-			name: "Overlapping Nets",
+			name: "Overlapping Nets-1",
 			config: &config.Config{
 				GlobalIPReplacementList: config.GlobalIPReplacementList{
 					Net: []config.GlobalNetReplacement{
@@ -128,6 +128,42 @@ func TestGlobalIPReplacementValidator_Validate(t *testing.T) {
 			},
 			expectError: true,
 			errorMsg:    "global_ip_replacement_list.net source '192.168.1.0/24' and '192.168.1.0/24' have overlap",
+		},
+		{
+			name: "Overlapping Nets-2",
+			config: &config.Config{
+				GlobalIPReplacementList: config.GlobalIPReplacementList{
+					Net: []config.GlobalNetReplacement{
+						{
+							Name: "net1",
+							Nets: []config.NetConfig{
+								{Source: "192.168.3.0", Target: "10.0.0.0", Mask: 24},
+								{Source: "192.168.2.0", Target: "10.0.1.0", Mask: 23},
+							},
+						},
+					},
+				},
+			},
+			expectError: true,
+			errorMsg:    "global_ip_replacement_list.net source '192.168.3.0/24' and '192.168.2.0/23' have overlap",
+		},
+		{
+			name: "Overlapping Nets-3",
+			config: &config.Config{
+				GlobalIPReplacementList: config.GlobalIPReplacementList{
+					Net: []config.GlobalNetReplacement{
+						{
+							Name: "net1",
+							Nets: []config.NetConfig{
+								{Source: "192.168.2.0", Target: "10.0.1.0", Mask: 23},
+								{Source: "192.168.3.0", Target: "10.0.0.0", Mask: 24},
+							},
+						},
+					},
+				},
+			},
+			expectError: true,
+			errorMsg:    "global_ip_replacement_list.net source '192.168.2.0/23' and '192.168.3.0/24' have overlap",
 		},
 		{
 			name: "Empty IP Name",
