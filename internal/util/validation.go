@@ -61,7 +61,6 @@ func ValidateIPReplacementList(list config.IPReplacementList, globalList config.
 				return fmt.Errorf("nets.net source '%s/%d' and '%s/%d' must not overlap", net.Source, net.Mask, net2.Source, net2.Mask)
 			}
 		}
-
 	}
 
 	sourceIPs := make(map[string]struct{})
