@@ -166,6 +166,24 @@ func TestGlobalIPReplacementValidator_Validate(t *testing.T) {
 			errorMsg:    "global_ip_replacement_list.net source '192.168.2.0/23' and '192.168.3.0/24' have overlap",
 		},
 		{
+			name: "Overlapping Nets-4",
+			config: &config.Config{
+				GlobalIPReplacementList: config.GlobalIPReplacementList{
+					Net: []config.GlobalNetReplacement{
+						{
+							Name: "net1",
+							Nets: []config.NetConfig{
+								{Source: "192.168.1.0", Target: "10.0.1.0", Mask: 25},
+								{Source: "192.168.1.0", Target: "10.0.0.0", Mask: 24},
+							},
+						},
+					},
+				},
+			},
+			expectError: true,
+			errorMsg:    "global_ip_replacement_list.net source '192.168.1.0/25' and '192.168.1.0/24' have overlap",
+		},
+		{
 			name: "Empty IP Name",
 			config: &config.Config{
 				GlobalIPReplacementList: config.GlobalIPReplacementList{
