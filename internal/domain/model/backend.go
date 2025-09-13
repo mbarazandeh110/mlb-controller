@@ -7,4 +7,6 @@ type Backend struct {
 	IP string
 	// Port is the port of the backend (from service NodePort or pod port).
 	Port int32
+	// Weight is the weight of the backend (default 1, increases with duplicates).
+	Weight int
 }
