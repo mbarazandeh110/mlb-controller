@@ -25,6 +25,7 @@ type AddressConfig struct {
 	Hostname string `mapstructure:"hostname,omitempty"`
 	CertFile string `mapstructure:"certfile,omitempty"`
 	KeyFile  string `mapstructure:"keyfile,omitempty"`
+	CAFile   string `mapstructure:"ca_file,omitempty"`
 }
 
 // IPReplacementList defines IP and network replacement rules for a load balancer.

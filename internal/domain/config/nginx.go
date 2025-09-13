@@ -1,3 +1,4 @@
+// internal/domain/config/nginx.go
 package config
 
 import "time"
