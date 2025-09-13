@@ -40,17 +40,6 @@ func TestLoadBalancerValidator_Validate(t *testing.T) {
 				},
 			},
 		}, true, "must be unique"},
-		{"Invalid Protocol", &config.Config{
-			LoadBalancers: config.LoadBalancersConfig{
-				LoadBalancers: []config.LoadBalancerConfig{
-					config.NginxConfig{
-						Type:      "nginx",
-						Name:      "nginx1",
-						Addresses: []config.AddressConfig{{Protocol: "ftp", IP: "192.168.1.1", Port: 80}},
-					},
-				},
-			},
-		}, true, "protocol must be one of"},
 		{"Invalid IP Replacement", &config.Config{
 			LoadBalancers: config.LoadBalancersConfig{
 				LoadBalancers: []config.LoadBalancerConfig{

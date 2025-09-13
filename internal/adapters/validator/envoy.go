@@ -21,6 +21,13 @@ func (v *EnvoyValidator) Validate(cfg *config.Config) error {
 
 func (v *EnvoyValidator) validateEnvoyConfig(lb config.EnvoyConfig) error {
 	// Validate timeouts
+
+	for _, address := range lb.Addresses {
+		if address.Protocol != "grpc" {
+			return fmt.Errorf("loadbalancers.%s '%s': protocol must be grpc, got: %s", lb.Type, lb.Name, address.Protocol)
+		}
+	}
+
 	if lb.UpstreamSyncPeriod < 0 {
 		return fmt.Errorf("upstream_sync_period must be non-negative")
 	}

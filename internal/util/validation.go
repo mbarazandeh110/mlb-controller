@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"mlb-controller/internal/domain/config"
 	"net"
+	"os"
 	"regexp"
 )
 
@@ -12,9 +13,10 @@ func IsValidIP(ip string) bool {
 	return net.ParseIP(ip) != nil
 }
 
-// IsValidProtocol checks if the given protocol is one of http, https, or grpc.
-func IsValidProtocol(protocol string) bool {
-	return protocol == "http" || protocol == "https" || protocol == "grpc"
+// IsFileExists checks if the given string is a valid file path.
+func IsFileExists(filename string) bool {
+	_, err := os.Stat(filename)
+	return err == nil
 }
 
 // IsValidDomain checks if the given hostname is a valid domain name.

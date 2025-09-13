@@ -38,20 +38,22 @@ func (v *LoadBalancerValidator) Validate(cfg *config.Config) error {
 
 func (v *LoadBalancerValidator) validateAddresses(addresses []config.AddressConfig, name, lbType string) error {
 	for _, addr := range addresses {
-		if !util.IsValidProtocol(addr.Protocol) {
-			return fmt.Errorf("loadbalancers.%s '%s': protocol must be one of: http, https, grpc; got: %s", lbType, name, addr.Protocol)
-		}
 		if !util.IsValidIP(addr.IP) {
 			return fmt.Errorf("loadbalancers.%s '%s': invalid IP in addresses: %s", lbType, name, addr.IP)
 		}
 		if !util.IsValidPort(addr.Port) {
 			return fmt.Errorf("loadbalancers.%s '%s': port must be between 0 and 65535: %d", lbType, name, addr.Port)
 		}
-		if addr.Protocol == "https" && !util.IsValidDomain(addr.Hostname) {
-			if addr.Hostname == "" {
-				return fmt.Errorf("loadbalancers.%s '%s': hostname is required for https protocol", lbType, name)
-			}
-			return fmt.Errorf("loadbalancers.%s '%s': invalid hostname: %s", lbType, name, addr.Hostname)
+
+		if (addr.CertFile != "" && addr.KeyFile == "") || (addr.CertFile == "" && addr.KeyFile != "") {
+			return fmt.Errorf("loadbalancers.%s '%s': buth of CertFile and KeyFile are required: %s", lbType, name, addr.CertFile)
+		}
+		if addr.CertFile != "" && !util.IsFileExists(addr.CertFile) {
+			return fmt.Errorf("loadbalancers.%s '%s': the CertFile is not exist: %s", lbType, name, addr.CertFile)
+		}
+
+		if addr.KeyFile != "" && !util.IsFileExists(addr.KeyFile) {
+			return fmt.Errorf("loadbalancers.%s '%s': the KeyFile is not exist: %s", lbType, name, addr.KeyFile)
 		}
 		// if addr.Protocol == "https" && addr.Hostname == "" {
 		// 	return fmt.Errorf("loadbalancers.%s '%s': hostname is only allowed for https protocol (index %d)", lbType, name, i)

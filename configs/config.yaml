@@ -140,10 +140,10 @@ loadbalancers:
   - type: envoy
     name: localLB # must be unique across all load balancers
     addresses:
-      - protocol: http
+      - protocol: grpc
         ip: 6.2.3.45 # must be a valid IP
         port: 80 # betwenn 0 and 65535
-      - protocol: https
+      - protocol: grpc
         ip: 6.3.4.56 # must be a valid IP
         port: 56 # betwenn 0 and 65535
         hostname: 'example.com' # require is protocol is https

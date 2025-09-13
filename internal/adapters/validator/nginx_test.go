@@ -50,6 +50,59 @@ func TestNginxValidator_Validate(t *testing.T) {
 				},
 			},
 		}, true, "fail_timeout must be non-negative"},
+		{"Invalid Protocol", &config.Config{
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					config.NginxConfig{
+						Type:      "nginx",
+						Name:      "nginx1",
+						Addresses: []config.AddressConfig{{Protocol: "ftp", IP: "192.168.1.1", Port: 80}},
+					},
+				},
+			},
+		}, true, "protocol must be one of: http, https, got: ftp"},
+		{"valid Protocol (http)", &config.Config{
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					config.NginxConfig{
+						Type:      "nginx",
+						Name:      "nginx1",
+						ListAPI:   "/list",
+						AddAPI:    "/add",
+						RemoveAPI: "/remove",
+						Addresses: []config.AddressConfig{{Protocol: "http", IP: "192.168.1.1", Port: 80}},
+					},
+				},
+			},
+		}, false, ""},
+		{"valid Protocol (https)", &config.Config{
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					config.NginxConfig{
+						Type:      "nginx",
+						Name:      "nginx1",
+						ListAPI:   "/list",
+						AddAPI:    "/add",
+						RemoveAPI: "/remove",
+						Addresses: []config.AddressConfig{{Protocol: "https", IP: "192.168.1.1", Port: 80, Hostname: "test.com"}},
+					},
+				},
+			},
+		}, false, ""},
+		{"Hostname is required", &config.Config{
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					config.NginxConfig{
+						Type:      "nginx",
+						Name:      "nginx1",
+						ListAPI:   "/list",
+						AddAPI:    "/add",
+						RemoveAPI: "/remove",
+						Addresses: []config.AddressConfig{{Protocol: "https", IP: "192.168.1.1", Port: 80}},
+					},
+				},
+			},
+		}, true, "hostname is required for https protocol"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
