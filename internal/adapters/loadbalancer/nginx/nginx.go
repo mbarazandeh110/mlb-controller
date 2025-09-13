@@ -19,18 +19,15 @@ type NginxAdapter struct {
 }
 
 // NewNginxAdapter creates a new NginxAdapter for the given LoadBalancerConfig.
-func NewNginxAdapter(cfg config.LoadBalancerConfig) (*NginxAdapter, error) {
+func NewNginxAdapter(cfg config.NginxConfig) (*NginxAdapter, error) {
 	if cfg.GetType() != "nginx" {
 		return nil, fmt.Errorf("invalid load balancer type: %s, expected nginx", cfg.GetType())
 	}
 
-	var clients []*NginxClient
-	for _, addr := range cfg.GetAddresses() {
-		client, err := NewNginxClient(addr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create client for address %s:%d: %w", addr.IP, addr.Port, err)
-		}
-		clients = append(clients, client)
+	clients, err := NewNginxClients(cfg)
+	if err != nil {
+		// return nil, err
+		return nil, fmt.Errorf("failed to create clients for nginx addresses %s: %w", cfg.Name, err)
 	}
 
 	return &NginxAdapter{

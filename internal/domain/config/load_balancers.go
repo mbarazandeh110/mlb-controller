@@ -14,18 +14,18 @@ type LoadBalancerConfig interface {
 	GetIPReplacement() bool
 	GetIPReplacementList() IPReplacementList
 	GetType() string
+	GetHostName() string
+	GetProtocol() string
+	GetCertFile() string
+	GetKeyFile() string
+	GetCAFile() string
 	SetDefaults(globalUpstreamSyncPeriod time.Duration) LoadBalancerConfig
 }
 
 // AddressConfig defines an address for a load balancer.
 type AddressConfig struct {
-	Protocol string `mapstructure:"protocol"` // http|https|grpc
-	IP       string `mapstructure:"ip"`
-	Port     int    `mapstructure:"port"`
-	Hostname string `mapstructure:"hostname,omitempty"`
-	CertFile string `mapstructure:"certfile,omitempty"`
-	KeyFile  string `mapstructure:"keyfile,omitempty"`
-	CAFile   string `mapstructure:"ca_file,omitempty"`
+	IP   string `mapstructure:"ip"`
+	Port int    `mapstructure:"port"`
 }
 
 // IPReplacementList defines IP and network replacement rules for a load balancer.

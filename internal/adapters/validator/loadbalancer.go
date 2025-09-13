@@ -25,6 +25,10 @@ func (v *LoadBalancerValidator) Validate(cfg *config.Config) error {
 		if err := v.validateAddresses(lb.GetAddresses(), name, lb.GetType()); err != nil {
 			return err
 		}
+		// Validate Certs
+		if err := v.validateCert(lb); err != nil {
+			return err
+		}
 
 		// Validate IP replacement if enabled
 		if lb.GetIPReplacement() {
@@ -44,21 +48,26 @@ func (v *LoadBalancerValidator) validateAddresses(addresses []config.AddressConf
 		if !util.IsValidPort(addr.Port) {
 			return fmt.Errorf("loadbalancers.%s '%s': port must be between 0 and 65535: %d", lbType, name, addr.Port)
 		}
-
-		if (addr.CertFile != "" && addr.KeyFile == "") || (addr.CertFile == "" && addr.KeyFile != "") {
-			return fmt.Errorf("loadbalancers.%s '%s': buth of CertFile and KeyFile are required: %s", lbType, name, addr.CertFile)
-		}
-		if addr.CertFile != "" && !util.IsFileExists(addr.CertFile) {
-			return fmt.Errorf("loadbalancers.%s '%s': the CertFile is not exist: %s", lbType, name, addr.CertFile)
-		}
-
-		if addr.KeyFile != "" && !util.IsFileExists(addr.KeyFile) {
-			return fmt.Errorf("loadbalancers.%s '%s': the KeyFile is not exist: %s", lbType, name, addr.KeyFile)
-		}
 		// if addr.Protocol == "https" && addr.Hostname == "" {
 		// 	return fmt.Errorf("loadbalancers.%s '%s': hostname is only allowed for https protocol (index %d)", lbType, name, i)
 		// }
 	}
+	return nil
+}
+
+func (v *LoadBalancerValidator) validateCert(lb config.LoadBalancerConfig) error {
+
+	if (lb.GetCertFile() != "" && lb.GetKeyFile() == "") || (lb.GetCertFile() == "" && lb.GetKeyFile() != "") {
+		return fmt.Errorf("loadbalancers.%s '%s': buth of CertFile and KeyFile are required: %s", lb.GetType(), lb.GetName(), lb.GetCertFile())
+	}
+	if lb.GetCertFile() != "" && !util.IsFileExists(lb.GetCertFile()) {
+		return fmt.Errorf("loadbalancers.%s '%s': the CertFile is not exist: %s", lb.GetType(), lb.GetName(), lb.GetCertFile())
+	}
+
+	if lb.GetKeyFile() != "" && !util.IsFileExists(lb.GetKeyFile()) {
+		return fmt.Errorf("loadbalancers.%s '%s': the KeyFile is not exist: %s", lb.GetType(), lb.GetName(), lb.GetKeyFile())
+	}
+
 	return nil
 }
 

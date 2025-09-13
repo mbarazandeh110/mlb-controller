@@ -20,6 +20,7 @@ func TestEnvoyValidator_Validate(t *testing.T) {
 				LoadBalancers: []config.LoadBalancerConfig{
 					config.EnvoyConfig{
 						Name:               "envoy1",
+						Protocol:           "grpc",
 						UpstreamSyncPeriod: 10 * time.Second,
 						RequestTimeout:     30 * time.Second,
 					},
@@ -30,7 +31,8 @@ func TestEnvoyValidator_Validate(t *testing.T) {
 			LoadBalancers: config.LoadBalancersConfig{
 				LoadBalancers: []config.LoadBalancerConfig{
 					config.EnvoyConfig{
-						Name:               "envoy1",
+						Name:               "envoy2",
+						Protocol:           "grpc",
 						UpstreamSyncPeriod: -10 * time.Second,
 					},
 				},
@@ -40,7 +42,8 @@ func TestEnvoyValidator_Validate(t *testing.T) {
 			LoadBalancers: config.LoadBalancersConfig{
 				LoadBalancers: []config.LoadBalancerConfig{
 					config.EnvoyConfig{
-						Name:           "envoy1",
+						Name:           "envoy3",
+						Protocol:       "grpc",
 						RequestTimeout: -30 * time.Second,
 					},
 				},
@@ -50,9 +53,10 @@ func TestEnvoyValidator_Validate(t *testing.T) {
 			LoadBalancers: config.LoadBalancersConfig{
 				LoadBalancers: []config.LoadBalancerConfig{
 					config.EnvoyConfig{
-						Type:      "nginx",
-						Name:      "nginx1",
-						Addresses: []config.AddressConfig{{Protocol: "ftp", IP: "192.168.1.1", Port: 80}},
+						Type:      "envoy",
+						Name:      "envoy4",
+						Protocol:  "ftp",
+						Addresses: []config.AddressConfig{{IP: "192.168.1.1", Port: 80}},
 					},
 				},
 			},
@@ -61,9 +65,10 @@ func TestEnvoyValidator_Validate(t *testing.T) {
 			LoadBalancers: config.LoadBalancersConfig{
 				LoadBalancers: []config.LoadBalancerConfig{
 					config.EnvoyConfig{
-						Type:      "nginx",
-						Name:      "nginx1",
-						Addresses: []config.AddressConfig{{Protocol: "grpc", IP: "192.168.1.1", Port: 80}},
+						Type:      "envoy",
+						Name:      "envoy5",
+						Protocol:  "grpc",
+						Addresses: []config.AddressConfig{{IP: "192.168.1.1", Port: 80}},
 					},
 				},
 			},

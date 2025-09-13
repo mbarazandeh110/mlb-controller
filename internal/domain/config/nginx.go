@@ -16,6 +16,11 @@ type NginxConfig struct {
 	UpstreamSyncPeriod time.Duration     `mapstructure:"upstream_sync_period"`
 	FailTimeout        time.Duration     `mapstructure:"fail_timeout"`
 	RequestTimeout     time.Duration     `mapstructure:"request_timeout"`
+	Protocol           string            `mapstructure:"protocol"` // http|https|grpc
+	Hostname           string            `mapstructure:"hostname,omitempty"`
+	CertFile           string            `mapstructure:"certfile,omitempty"`
+	KeyFile            string            `mapstructure:"keyfile,omitempty"`
+	CAFile             string            `mapstructure:"ca_file,omitempty"`
 }
 
 func (c NginxConfig) GetName() string                         { return c.Name }
@@ -23,6 +28,11 @@ func (c NginxConfig) GetAddresses() []AddressConfig           { return c.Address
 func (c NginxConfig) GetIPReplacement() bool                  { return c.IPReplacement }
 func (c NginxConfig) GetIPReplacementList() IPReplacementList { return c.IPReplacementList }
 func (c NginxConfig) GetType() string                         { return c.Type }
+func (c NginxConfig) GetHostName() string                     { return c.Hostname }
+func (c NginxConfig) GetProtocol() string                     { return c.Protocol }
+func (c NginxConfig) GetCertFile() string                     { return c.CertFile }
+func (c NginxConfig) GetKeyFile() string                      { return c.KeyFile }
+func (c NginxConfig) GetCAFile() string                       { return c.CAFile }
 
 func (c NginxConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration) LoadBalancerConfig {
 	if c.UpstreamSyncPeriod == 0 {

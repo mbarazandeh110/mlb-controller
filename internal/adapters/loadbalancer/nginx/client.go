@@ -21,17 +21,17 @@ type NginxClient struct {
 }
 
 // NewNginxClient creates a new NginxClient based on the provided AddressConfig.
-func NewNginxClient(addr config.AddressConfig) (*NginxClient, error) {
+func NewNginxClients(ngx config.NginxConfig) ([]*NginxClient, error) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: false,         // Always false as per requirement
-			ServerName:         addr.Hostname, // Set SNI for HTTPS
+			InsecureSkipVerify: false,        // Always false as per requirement
+			ServerName:         ngx.Hostname, // Set SNI for HTTPS
 		},
 	}
 
 	// Handle HTTPS with client certificate if provided
-	if addr.Protocol == "https" && addr.CertFile != "" && addr.KeyFile != "" {
-		cert, err := tls.X509KeyPair([]byte(addr.CertFile), []byte(addr.KeyFile))
+	if ngx.Protocol == "https" && ngx.CertFile != "" && ngx.KeyFile != "" {
+		cert, err := tls.X509KeyPair([]byte(ngx.CertFile), []byte(ngx.KeyFile))
 		if err != nil {
 			return nil, fmt.Errorf("failed to load client certificate: %w", err)
 		}
@@ -39,26 +39,30 @@ func NewNginxClient(addr config.AddressConfig) (*NginxClient, error) {
 	}
 
 	// Handle CA certificate for server verification
-	if addr.Protocol == "https" && addr.CAFile != "" {
+	if ngx.Protocol == "https" && ngx.CAFile != "" {
 		caCertPool := x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM([]byte(addr.CAFile)) {
+		if !caCertPool.AppendCertsFromPEM([]byte(ngx.CAFile)) {
 			return nil, fmt.Errorf("failed to append CA certificate")
 		}
 		transport.TLSClientConfig.RootCAs = caCertPool
 	}
 
-	client := &http.Client{
-		Transport: transport,
-		Timeout:   10 * time.Second, // Configurable if needed
+	var clients []*NginxClient
+	for _, addr := range ngx.GetAddresses() {
+		baseURL := fmt.Sprintf("%s://%s:%d", ngx.Protocol, addr.IP, addr.Port)
+		client := &http.Client{
+			Transport: transport,
+			Timeout:   10 * time.Second, // Configurable if needed
+		}
+		newngx := &NginxClient{
+			client:  client,
+			baseURL: baseURL,
+			host:    ngx.Hostname,
+		}
+		clients = append(clients, newngx)
 	}
 
-	baseURL := fmt.Sprintf("%s://%s:%d", addr.Protocol, addr.IP, addr.Port)
-
-	return &NginxClient{
-		client:  client,
-		baseURL: baseURL,
-		host:    addr.Hostname,
-	}, nil
+	return clients, nil
 }
 
 // doRequest performs an HTTP request with the correct Host header and returns the response body.

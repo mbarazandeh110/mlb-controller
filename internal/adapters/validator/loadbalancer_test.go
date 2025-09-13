@@ -20,7 +20,8 @@ func TestLoadBalancerValidator_Validate(t *testing.T) {
 					config.NginxConfig{
 						Type:      "nginx",
 						Name:      "nginx1",
-						Addresses: []config.AddressConfig{{Protocol: "http", IP: "192.168.1.1", Port: 80}},
+						Protocol:  "http",
+						Addresses: []config.AddressConfig{{IP: "192.168.1.1", Port: 80}},
 					},
 				},
 			},

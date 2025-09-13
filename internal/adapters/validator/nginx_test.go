@@ -23,6 +23,7 @@ func TestNginxValidator_Validate(t *testing.T) {
 						ListAPI:            "/list",
 						AddAPI:             "/add",
 						RemoveAPI:          "/remove",
+						Protocol:           "http",
 						UpstreamSyncPeriod: 10 * time.Second,
 						FailTimeout:        60 * time.Second,
 						RequestTimeout:     30 * time.Second,
@@ -33,7 +34,7 @@ func TestNginxValidator_Validate(t *testing.T) {
 		{"Missing ListAPI", &config.Config{
 			LoadBalancers: config.LoadBalancersConfig{
 				LoadBalancers: []config.LoadBalancerConfig{
-					config.NginxConfig{Name: "nginx1"},
+					config.NginxConfig{Name: "nginx2", Protocol: "http"},
 				},
 			},
 		}, true, "list_api is required"},
@@ -41,10 +42,11 @@ func TestNginxValidator_Validate(t *testing.T) {
 			LoadBalancers: config.LoadBalancersConfig{
 				LoadBalancers: []config.LoadBalancerConfig{
 					config.NginxConfig{
-						Name:        "nginx1",
+						Name:        "nginx3",
 						ListAPI:     "/list",
 						AddAPI:      "/add",
 						RemoveAPI:   "/remove",
+						Protocol:    "http",
 						FailTimeout: -60 * time.Second,
 					},
 				},
@@ -55,8 +57,9 @@ func TestNginxValidator_Validate(t *testing.T) {
 				LoadBalancers: []config.LoadBalancerConfig{
 					config.NginxConfig{
 						Type:      "nginx",
-						Name:      "nginx1",
-						Addresses: []config.AddressConfig{{Protocol: "ftp", IP: "192.168.1.1", Port: 80}},
+						Name:      "nginx4",
+						Protocol:  "ftp",
+						Addresses: []config.AddressConfig{{IP: "192.168.1.1", Port: 80}},
 					},
 				},
 			},
@@ -66,11 +69,12 @@ func TestNginxValidator_Validate(t *testing.T) {
 				LoadBalancers: []config.LoadBalancerConfig{
 					config.NginxConfig{
 						Type:      "nginx",
-						Name:      "nginx1",
+						Name:      "nginx5",
 						ListAPI:   "/list",
 						AddAPI:    "/add",
 						RemoveAPI: "/remove",
-						Addresses: []config.AddressConfig{{Protocol: "http", IP: "192.168.1.1", Port: 80}},
+						Protocol:  "http",
+						Addresses: []config.AddressConfig{{IP: "192.168.1.1", Port: 80}},
 					},
 				},
 			},
@@ -80,11 +84,13 @@ func TestNginxValidator_Validate(t *testing.T) {
 				LoadBalancers: []config.LoadBalancerConfig{
 					config.NginxConfig{
 						Type:      "nginx",
-						Name:      "nginx1",
+						Name:      "nginx6",
 						ListAPI:   "/list",
 						AddAPI:    "/add",
 						RemoveAPI: "/remove",
-						Addresses: []config.AddressConfig{{Protocol: "https", IP: "192.168.1.1", Port: 80, Hostname: "test.com"}},
+						Protocol:  "https",
+						Hostname:  "test.com",
+						Addresses: []config.AddressConfig{{IP: "192.168.1.1", Port: 80}},
 					},
 				},
 			},
@@ -94,11 +100,12 @@ func TestNginxValidator_Validate(t *testing.T) {
 				LoadBalancers: []config.LoadBalancerConfig{
 					config.NginxConfig{
 						Type:      "nginx",
-						Name:      "nginx1",
+						Name:      "nginx7",
 						ListAPI:   "/list",
 						AddAPI:    "/add",
 						RemoveAPI: "/remove",
-						Addresses: []config.AddressConfig{{Protocol: "https", IP: "192.168.1.1", Port: 80}},
+						Protocol:  "https",
+						Addresses: []config.AddressConfig{{IP: "192.168.1.1", Port: 80}},
 					},
 				},
 			},

@@ -11,6 +11,11 @@ type EnvoyConfig struct {
 	Addresses          []AddressConfig   `mapstructure:"addresses"`
 	UpstreamSyncPeriod time.Duration     `mapstructure:"upstream_sync_period"`
 	RequestTimeout     time.Duration     `mapstructure:"request_timeout"`
+	Protocol           string            `mapstructure:"protocol"` // http|https|grpc
+	Hostname           string            `mapstructure:"hostname,omitempty"`
+	CertFile           string            `mapstructure:"certfile,omitempty"`
+	KeyFile            string            `mapstructure:"keyfile,omitempty"`
+	CAFile             string            `mapstructure:"ca_file,omitempty"`
 }
 
 func (c EnvoyConfig) GetName() string                         { return c.Name }
@@ -18,6 +23,11 @@ func (c EnvoyConfig) GetAddresses() []AddressConfig           { return c.Address
 func (c EnvoyConfig) GetIPReplacement() bool                  { return c.IPReplacement }
 func (c EnvoyConfig) GetIPReplacementList() IPReplacementList { return c.IPReplacementList }
 func (c EnvoyConfig) GetType() string                         { return c.Type }
+func (c EnvoyConfig) GetHostName() string                     { return c.Hostname }
+func (c EnvoyConfig) GetProtocol() string                     { return c.Protocol }
+func (c EnvoyConfig) GetCertFile() string                     { return c.CertFile }
+func (c EnvoyConfig) GetKeyFile() string                      { return c.KeyFile }
+func (c EnvoyConfig) GetCAFile() string                       { return c.CAFile }
 
 func (c EnvoyConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration) LoadBalancerConfig {
 	if c.UpstreamSyncPeriod == 0 {

@@ -23,16 +23,14 @@ func (v *NginxValidator) Validate(cfg *config.Config) error {
 func (v *NginxValidator) validateNginxConfig(lb config.NginxConfig) error {
 	// Validate APIs
 
-	for _, address := range lb.Addresses {
-		if address.Protocol != "http" && address.Protocol != "https" {
-			return fmt.Errorf("loadbalancers.%s '%s': protocol must be one of: http, https, got: %s", lb.Type, lb.Name, address.Protocol)
+	if lb.Protocol != "http" && lb.Protocol != "https" {
+		return fmt.Errorf("loadbalancers.%s '%s': protocol must be one of: http, https, got: %s", lb.Type, lb.Name, lb.Protocol)
+	}
+	if lb.Protocol == "https" && !util.IsValidDomain(lb.Hostname) {
+		if lb.Hostname == "" {
+			return fmt.Errorf("loadbalancers.%s '%s': hostname is required for https protocol", lb.Type, lb.Name)
 		}
-		if address.Protocol == "https" && !util.IsValidDomain(address.Hostname) {
-			if address.Hostname == "" {
-				return fmt.Errorf("loadbalancers.%s '%s': hostname is required for https protocol", lb.Type, lb.Name)
-			}
-			return fmt.Errorf("loadbalancers.%s '%s': invalid hostname: %s", lb.Type, lb.Name, address.Hostname)
-		}
+		return fmt.Errorf("loadbalancers.%s '%s': invalid hostname: %s", lb.Type, lb.Name, lb.Hostname)
 	}
 
 	if lb.ListAPI == "" {

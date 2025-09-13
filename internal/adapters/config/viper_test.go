@@ -58,18 +58,18 @@ global_ip_replacement_list:
 loadbalancers:
   - type: nginx
     name: nginx1
+    protocol: http
     addresses:
-      - protocol: http
-        ip: 192.168.1.1
+      - ip: 192.168.1.1
         port: 80
     list_api: /list
     add_api: /add
     remove_api: /remove
   - type: envoy
     name: envoy1
+    protocol: grpc
     addresses:
-      - protocol: grpc
-        ip: 10.0.0.1
+      - ip: 10.0.0.1
         port: 50051
 `
 	tmpFile, err := os.CreateTemp("", "config*.yaml")
