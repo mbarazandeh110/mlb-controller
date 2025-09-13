@@ -30,7 +30,8 @@ func (v *LoadBalancerValidator) Validate(cfg *config.Config) error {
 			return err
 		}
 
-		// Validate IP replacement if enabled
+		// Validate IP replacement configuration for the load balancer.
+		// Ensures that if ip_replacement is enabled, ip_replacement_list contains at least one rule.
 		if lb.GetIPReplacement() {
 			ipList := lb.GetIPReplacementList()
 			if len(ipList.GlobalIPs) == 0 && len(ipList.GlobalNets) == 0 && len(ipList.Nets) == 0 && len(ipList.IPs) == 0 {
