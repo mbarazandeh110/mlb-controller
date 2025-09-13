@@ -148,7 +148,11 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 	desiredWeights := make(map[string]int)
 	for _, b := range upstream.Backends {
 		key := fmt.Sprintf("%s:%d", b.IP, b.Port)
-		desiredWeights[key]++
+		if value, exists := desiredWeights[key]; exists {
+			desiredWeights[key] = b.Weight + value
+		} else {
+			desiredWeights[key] = b.Weight
+		}
 	}
 
 	// Convert current backends to map for comparison
@@ -167,7 +171,15 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 
 		currentWeight, exists := currentWeights[key]
 
-		if !exists || currentWeight != desiredWeight {
+		if !exists {
+			for _, client := range a.clients {
+				path := fmt.Sprintf("dynamic?upstream=%s&add=&server=%s:%d&weight=%d", url.QueryEscape(upstream.Name), url.QueryEscape(ip), port, desiredWeight)
+				_, err := client.doRequest("GET", path)
+				if err != nil {
+					return fmt.Errorf("failed to update backend %s:%d (weight=%d) in upstream %s: %w", ip, port, desiredWeight, upstream.Name, err)
+				}
+			}
+		} else if currentWeight != desiredWeight {
 			for _, client := range a.clients {
 				path := fmt.Sprintf("dynamic?upstream=%s&server=%s:%d&weight=%d", url.QueryEscape(upstream.Name), url.QueryEscape(ip), port, desiredWeight)
 				_, err := client.doRequest("GET", path)
@@ -247,14 +259,4 @@ func parseNginxBackends(response string) ([]model.Backend, error) {
 	}
 
 	return backends, nil
-}
-
-// containsBackend checks if a backend exists in a list of backends.
-func containsBackend(backends []model.Backend, target model.Backend) bool {
-	for _, b := range backends {
-		if b.IP == target.IP && b.Port == target.Port {
-			return true
-		}
-	}
-	return false
 }
