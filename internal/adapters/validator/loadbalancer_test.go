@@ -174,3 +174,27 @@ func TestLoadBalancerValidator_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadBalancerValidator_IPReplacementListEmpty(t *testing.T) {
+	cfg := &config.Config{
+		LoadBalancers: config.LoadBalancersConfig{
+			LoadBalancers: []config.LoadBalancerConfig{
+				config.NginxConfig{
+					Type:          "nginx",
+					Name:          "nginx1",
+					IPReplacement: true,
+					IPReplacementList: config.IPReplacementList{
+						Nets:       []config.NetConfig{},
+						IPs:        []config.IPConfig{},
+						GlobalNets: []string{},
+						GlobalIPs:  []string{},
+					},
+				},
+			},
+		},
+	}
+	v := &LoadBalancerValidator{}
+	err := v.Validate(cfg)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "ip_replacement_list is empty")
+}
