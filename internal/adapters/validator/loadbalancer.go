@@ -32,6 +32,10 @@ func (v *LoadBalancerValidator) Validate(cfg *config.Config) error {
 
 		// Validate IP replacement if enabled
 		if lb.GetIPReplacement() {
+			if (len(lb.GetIPReplacementList().GlobalIPs) == 0) && (len(lb.GetIPReplacementList().GlobalNets) == 0) &&
+				(len(lb.GetIPReplacementList().Nets) == 0) && (len(lb.GetIPReplacementList().IPs) == 0) {
+				return fmt.Errorf("ip_replacement_list is empty: when ip_replacement is true ip_replacement_list is required '%s, %s'", lb.GetType(), lb.GetName())
+			}
 			if err := v.validateIPReplacementList(lb.GetIPReplacementList(), cfg.GlobalIPReplacementList, name, lb.GetType()); err != nil {
 				return err
 			}
