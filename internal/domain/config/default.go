@@ -37,6 +37,9 @@ func ApplyDefaultValues(cfg *Config) {
 	if cfg.Kubernetes.ResyncPeriod == 0 {
 		cfg.Kubernetes.ResyncPeriod = 30 * time.Second
 	}
+	if cfg.RequestPoolSize == 0 {
+		cfg.RequestPoolSize = 10 // Default: 10 concurrent requests
+	}
 
 	// Apply defaults for each load balancer
 	for i, lb := range cfg.LoadBalancers.LoadBalancers {

@@ -1,6 +1,7 @@
 # Global configuration for upstream synchronization
 # Specifies the default period for syncing upstreams across all load balancers
 global_upstream_sync_period: 10s # default 10s and sync period for all load balancers (update_period)
+request_pool_size: 20 # default 10
 
 # Leader election settings for ensuring a single controller instance
 leader_election:

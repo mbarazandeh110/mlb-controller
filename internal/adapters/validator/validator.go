@@ -24,6 +24,7 @@ func NewCompositeValidator() *CompositeValidator {
 			&LoadBalancerValidator{},
 			&NginxValidator{},
 			&EnvoyValidator{},
+			&RequestPoolValidator{},
 		},
 	}
 }
@@ -47,6 +48,15 @@ type GlobalConfigValidator struct{}
 func (v *GlobalConfigValidator) Validate(cfg *config.Config) error {
 	if cfg.GlobalUpstreamSyncPeriod < 0 {
 		return fmt.Errorf("global_upstream_sync_period must be non-negative")
+	}
+	return nil
+}
+
+type RequestPoolValidator struct{}
+
+func (v *RequestPoolValidator) Validate(cfg *config.Config) error {
+	if cfg.RequestPoolSize <= 0 {
+		return fmt.Errorf("request_pool_size must be positive")
 	}
 	return nil
 }

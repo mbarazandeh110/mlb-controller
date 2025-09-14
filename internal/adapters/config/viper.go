@@ -52,6 +52,7 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 		Kubernetes               domain.KubernetesConfig        `mapstructure:"kubernetes"`
 		GlobalIPReplacementList  domain.GlobalIPReplacementList `mapstructure:"global_ip_replacement_list"`
 		LoadBalancers            []map[string]interface{}       `mapstructure:"loadbalancers"`
+		RequestPoolSize          int                            `mapstructure:"request_pool_size"`
 	}
 
 	// Configure mapstructure decoder with DecodeHook
@@ -76,6 +77,7 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 		Kubernetes:               rawConfig.Kubernetes,
 		GlobalIPReplacementList:  rawConfig.GlobalIPReplacementList,
 		LoadBalancers:            domain.LoadBalancersConfig{},
+		RequestPoolSize:          rawConfig.RequestPoolSize,
 	}
 
 	// Unmarshal loadbalancers based on type
