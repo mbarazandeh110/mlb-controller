@@ -73,6 +73,10 @@ func (v *LoadBalancerValidator) validateCert(lb config.LoadBalancerConfig) error
 		return fmt.Errorf("loadbalancers.%s '%s': the KeyFile is not exist: %s", lb.GetType(), lb.GetName(), lb.GetKeyFile())
 	}
 
+	if lb.GetCAFile() != "" && !util.IsFileExists(lb.GetCAFile()) {
+		return fmt.Errorf("loadbalancers.%s '%s': the GetCAFile is not exist: %s", lb.GetType(), lb.GetName(), lb.GetCAFile())
+	}
+
 	return nil
 }
 
