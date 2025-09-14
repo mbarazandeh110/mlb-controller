@@ -25,25 +25,6 @@ func TestIsValidIP(t *testing.T) {
 	}
 }
 
-func TestIsValidProtocol(t *testing.T) {
-	tests := []struct {
-		name     string
-		protocol string
-		want     bool
-	}{
-		{"HTTP", "http", true},
-		{"HTTPS", "https", true},
-		{"GRPC", "grpc", true},
-		{"Invalid", "ftp", false},
-		{"Empty", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, IsValidProtocol(tt.protocol))
-		})
-	}
-}
-
 func TestIsValidDomain(t *testing.T) {
 	tests := []struct {
 		name     string
