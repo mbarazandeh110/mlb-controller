@@ -11,12 +11,14 @@ import (
 	"mlb-controller/internal/domain/model"
 
 	"github.com/hashicorp/go-multierror"
+	"golang.org/x/sync/semaphore"
 )
 
 // NginxAdapter implements the LoadBalancerAdapter interface for NGINX.
 type NginxAdapter struct {
-	clients []*NginxClient
-	config  config.LoadBalancerConfig
+	clients   []*NginxClient
+	config    config.LoadBalancerConfig
+	semaphore *semaphore.Weighted // Added for concurrency control
 }
 
 // NewNginxAdapter creates a new NginxAdapter for the given LoadBalancerConfig.
@@ -30,9 +32,13 @@ func NewNginxAdapter(cfg config.NginxConfig) (*NginxAdapter, error) {
 		return nil, fmt.Errorf("failed to create clients for nginx addresses %s: %w", cfg.Name, err)
 	}
 
+	// Initialize semaphore with RequestPoolSize
+	sem := semaphore.NewWeighted(int64(cfg.GetRequestPoolSize()))
+
 	return &NginxAdapter{
-		clients: clients,
-		config:  cfg,
+		clients:   clients,
+		config:    cfg,
+		semaphore: sem,
 	}, nil
 }
 
