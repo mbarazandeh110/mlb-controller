@@ -110,22 +110,25 @@ func (a *NginxAdapter) RemoveBackend(ctx context.Context, upstreamName string, b
 		return fmt.Errorf("failed to check current backends for upstream %s: %w", upstreamName, err)
 	}
 
-	backend.Weight = -1
+	weight := -1
 	for _, b := range currentBackends {
 		if b.IP == backend.IP && b.Port == backend.Port {
-			backend.Weight = b.Weight
+			weight = b.Weight
 			break
 		}
 	}
 
 	var errors *multierror.Error
-	if backend.Weight == -1 {
-		errors = multierror.Append(errors, fmt.Errorf("backend %s:%d not found in upstream %s", backend.IP, backend.Port, upstreamName))
+	if weight == -1 {
+		return fmt.Errorf("backend %s:%d not found in upstream %s", backend.IP, backend.Port, upstreamName)
 	}
 
+	if backend.Weight <= 1 {
+		backend.Weight = weight
+	}
 	for _, client := range a.clients {
 		path := ""
-		if backend.Weight <= 1 {
+		if backend.Weight == 1 {
 			// Remove backend completely
 			path = fmt.Sprintf("dynamic?upstream=%s&remove=&server=%s:%d", url.QueryEscape(upstreamName), url.QueryEscape(backend.IP), backend.Port)
 		} else {
@@ -234,17 +237,17 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 // parseNginxBackends parses NGINX response text into a list of Backends.
 func parseNginxBackends(response string) ([]model.Backend, error) {
 	var backends []model.Backend
-	// Example response: "server 127.0.0.1:6001 weight=1 max_fails=1 fail_timeout=10s down;"
-	lines := strings.Split(response, "\n")
-	re := regexp.MustCompile(`server\s+([\d.]+):(\d+)\s+weight=(\d+)(?:\s+max_fails=\d+)?(?:\s+fail_timeout=\d+s)?(?:\s+down)?(?:\s+backup)?;`)
+	// Updated regex to handle optional 's' in fail_timeout and flexible order of parameters
+	re := regexp.MustCompile(`server\s+([\d.]+):(\d+)\s+weight=(\d+)(?:\s+max_fails=\d+)?(?:\s+fail_timeout=\d+(?:s)?)?(?:\s+(?:down|backup))*\s*;`)
 
+	lines := strings.Split(response, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 		matches := re.FindStringSubmatch(line)
-		if len(matches) != 4 {
+		if len(matches) < 4 {
 			return nil, fmt.Errorf("invalid backend format: %s", line)
 		}
 
