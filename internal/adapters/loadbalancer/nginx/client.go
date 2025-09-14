@@ -1,7 +1,7 @@
-// internal/adapters/loadbalancer/nginx/client.go
 package nginx
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"mlb-controller/internal/domain/config"
+
+	"github.com/cenkalti/backoff/v4"
 )
 
 // NginxClient handles HTTP/HTTPS requests to an NGINX API address.
@@ -20,7 +22,7 @@ type NginxClient struct {
 	host    string // For HTTP Host header and SNI
 }
 
-// NewNginxClient creates a new NginxClient based on the provided AddressConfig.
+// NewNginxClients creates a new NginxClient based on the provided AddressConfig.
 func NewNginxClients(ngx config.NginxConfig) ([]*NginxClient, error) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
@@ -66,9 +68,9 @@ func NewNginxClients(ngx config.NginxConfig) ([]*NginxClient, error) {
 }
 
 // doRequest performs an HTTP request with the correct Host header and returns the response body.
-func (c *NginxClient) doRequest(method, path string) ([]byte, error) {
+func (c *NginxClient) doRequest(ctx context.Context, method, path string) ([]byte, error) {
 	url := fmt.Sprintf("%s/%s", c.baseURL, strings.TrimPrefix(path, "/"))
-	req, err := http.NewRequest(method, url, nil)
+	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -85,7 +87,8 @@ func (c *NginxClient) doRequest(method, path string) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("request failed with status: %d", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
@@ -94,4 +97,27 @@ func (c *NginxClient) doRequest(method, path string) ([]byte, error) {
 	}
 
 	return bodyBytes, nil
+}
+
+// doRequestWithRetry performs an HTTP request with retries using exponential backoff.
+func (c *NginxClient) doRequestWithRetry(ctx context.Context, method, path string) ([]byte, error) {
+	var body []byte
+	operation := func() error {
+		var err error
+		body, err = c.doRequest(ctx, method, path)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Configure exponential backoff
+	b := backoff.NewExponentialBackOff()
+	b.MaxElapsedTime = 30 * time.Second // Total retry duration
+	err := backoff.Retry(operation, backoff.WithContext(b, ctx))
+	if err != nil {
+		return nil, fmt.Errorf("failed after retries: %w", err)
+	}
+
+	return body, nil
 }
