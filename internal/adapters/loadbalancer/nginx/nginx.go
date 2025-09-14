@@ -160,7 +160,6 @@ func (a *NginxAdapter) RemoveBackend(ctx context.Context, upstreamName string, b
 
 // SyncUpstream ensures the upstream matches the desired state for all addresses (idempotent).
 func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream) error {
-	// Get current backends
 	desiredBackend := make(map[string]model.Backend)
 	for _, db := range upstream.Backends {
 		if tmpdb, exists := desiredBackend[fmt.Sprintf("%s:%d", db.IP, db.Port)]; exists {
