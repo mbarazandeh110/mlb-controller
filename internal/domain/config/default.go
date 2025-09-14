@@ -43,6 +43,6 @@ func ApplyDefaultValues(cfg *Config) {
 
 	// Apply defaults for each load balancer
 	for i, lb := range cfg.LoadBalancers.LoadBalancers {
-		cfg.LoadBalancers.LoadBalancers[i] = lb.SetDefaults(cfg.GlobalUpstreamSyncPeriod)
+		cfg.LoadBalancers.LoadBalancers[i] = lb.SetDefaults(cfg.GlobalUpstreamSyncPeriod, cfg.RequestPoolSize)
 	}
 }

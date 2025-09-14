@@ -61,6 +61,7 @@ global_ip_replacement_list:
 # Load balancer configurations for Nginx and Envoy
 loadbalancers:
   - type: nginx
+    request_pool_size: 22
     name: CDN # must be unique across all load balancers
     ip_replacement: true # default false
     update_period: 1s # default 1s

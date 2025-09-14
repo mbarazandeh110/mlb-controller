@@ -16,6 +16,7 @@ type EnvoyConfig struct {
 	CertFile           string            `mapstructure:"certfile,omitempty"`
 	KeyFile            string            `mapstructure:"keyfile,omitempty"`
 	CAFile             string            `mapstructure:"ca_file,omitempty"`
+	RequestPoolSize    int               `mapstructure:"request_pool_size"`
 }
 
 func (c EnvoyConfig) GetName() string                         { return c.Name }
@@ -28,13 +29,17 @@ func (c EnvoyConfig) GetProtocol() string                     { return c.Protoco
 func (c EnvoyConfig) GetCertFile() string                     { return c.CertFile }
 func (c EnvoyConfig) GetKeyFile() string                      { return c.KeyFile }
 func (c EnvoyConfig) GetCAFile() string                       { return c.CAFile }
+func (c EnvoyConfig) GetRequestPoolSize() int                 { return c.RequestPoolSize }
 
-func (c EnvoyConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration) LoadBalancerConfig {
+func (c EnvoyConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig {
 	if c.UpstreamSyncPeriod == 0 {
 		c.UpstreamSyncPeriod = globalUpstreamSyncPeriod
 	}
 	if c.RequestTimeout == 0 {
 		c.RequestTimeout = 30 * time.Second
+	}
+	if c.RequestPoolSize == 0 {
+		c.RequestPoolSize = globalRequestPoolSize
 	}
 	return c
 }

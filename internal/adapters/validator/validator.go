@@ -49,6 +49,11 @@ func (v *GlobalConfigValidator) Validate(cfg *config.Config) error {
 	if cfg.GlobalUpstreamSyncPeriod < 0 {
 		return fmt.Errorf("global_upstream_sync_period must be non-negative")
 	}
+	for _, lb := range cfg.LoadBalancers.LoadBalancers {
+		if lb.GetRequestPoolSize() <= 0 { // After defaults
+			return fmt.Errorf("loadbalancer '%s': request_pool_size must be positive (after fallback to global)", lb.GetName())
+		}
+	}
 	return nil
 }
 

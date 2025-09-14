@@ -21,6 +21,7 @@ type NginxConfig struct {
 	CertFile           string            `mapstructure:"certfile,omitempty"`
 	KeyFile            string            `mapstructure:"keyfile,omitempty"`
 	CAFile             string            `mapstructure:"ca_file,omitempty"`
+	RequestPoolSize    int               `mapstructure:"request_pool_size"`
 }
 
 func (c NginxConfig) GetName() string                         { return c.Name }
@@ -33,8 +34,9 @@ func (c NginxConfig) GetProtocol() string                     { return c.Protoco
 func (c NginxConfig) GetCertFile() string                     { return c.CertFile }
 func (c NginxConfig) GetKeyFile() string                      { return c.KeyFile }
 func (c NginxConfig) GetCAFile() string                       { return c.CAFile }
+func (c NginxConfig) GetRequestPoolSize() int                 { return c.RequestPoolSize }
 
-func (c NginxConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration) LoadBalancerConfig {
+func (c NginxConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig {
 	if c.UpstreamSyncPeriod == 0 {
 		c.UpstreamSyncPeriod = globalUpstreamSyncPeriod
 	}
@@ -43,6 +45,9 @@ func (c NginxConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration) LoadBal
 	}
 	if c.RequestTimeout == 0 {
 		c.RequestTimeout = 30 * time.Second
+	}
+	if c.RequestPoolSize == 0 {
+		c.RequestPoolSize = globalRequestPoolSize
 	}
 	return c
 }

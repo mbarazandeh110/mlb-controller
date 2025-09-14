@@ -19,7 +19,8 @@ type LoadBalancerConfig interface {
 	GetCertFile() string
 	GetKeyFile() string
 	GetCAFile() string
-	SetDefaults(globalUpstreamSyncPeriod time.Duration) LoadBalancerConfig
+	GetRequestPoolSize() int
+	SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig
 }
 
 // AddressConfig defines an address for a load balancer.
