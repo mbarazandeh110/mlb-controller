@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"fmt"
-	"os"
 
 	"mlb-controller/internal/di"
 	logging_ports "mlb-controller/internal/ports/logging"
@@ -18,8 +16,7 @@ func main() {
 	// Initialize dependencies
 	container, err := di.NewContainer(*configPath)
 	if err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "Failed to initialize container: %v\n", err)
-		os.Exit(1)
+		container.Logger.Fatal("Failed to initialize container", logging_ports.Field{Key: "error", Value: err})
 	}
 	defer container.App.Stop()
 
