@@ -54,7 +54,7 @@ func NewNginxClients(ngx config.NginxConfig) ([]*NginxClient, error) {
 		baseURL := fmt.Sprintf("%s://%s:%d", ngx.Protocol, addr.IP, addr.Port)
 		client := &http.Client{
 			Transport: transport,
-			Timeout:   10 * time.Second, // Configurable if needed
+			Timeout:   ngx.RequestTimeout, // Configurable if needed
 		}
 		newngx := &NginxClient{
 			client:  client,
