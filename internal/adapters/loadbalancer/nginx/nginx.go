@@ -27,7 +27,7 @@ func NewNginxAdapter(cfg config.NginxConfig) (*NginxAdapter, error) {
 		return nil, fmt.Errorf("invalid load balancer type: %s, expected nginx", cfg.GetType())
 	}
 
-	clients, err := NewNginxClients(cfg)
+	clients, err := NewNginxClientSet(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create clients for nginx addresses %s: %w", cfg.Name, err)
 	}

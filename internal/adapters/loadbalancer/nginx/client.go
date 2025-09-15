@@ -22,8 +22,8 @@ type NginxClient struct {
 	host    string // For HTTP Host header and SNI
 }
 
-// NewNginxClients creates a new NginxClient based on the provided AddressConfig.
-func NewNginxClients(ngx config.NginxConfig) ([]*NginxClient, error) {
+// NewNginxClientSet creates a new NginxClient based on the provided AddressConfig.
+func NewNginxClientSet(ngx config.NginxConfig) ([]*NginxClient, error) {
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: false,        // Always false as per requirement
