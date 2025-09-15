@@ -3,12 +3,12 @@ module mlb-controller
 go 1.24.6
 
 require (
-	github.com/cenkalti/backoff/v4 v4.3.0
 	github.com/go-viper/mapstructure/v2 v2.2.1
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/spf13/viper v1.20.1
 	github.com/stretchr/testify v1.10.0
 	go.uber.org/zap v1.27.0
+	golang.org/x/sync v0.10.0
 )
 
 require (
