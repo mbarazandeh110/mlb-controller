@@ -15,7 +15,7 @@ import (
 // NginxClient handles HTTP/HTTPS requests to an NGINX API address.
 type NginxClient struct {
 	client  *http.Client
-	baseURL string // Protocl://IP:Port/path
+	baseURL string // Protocol://IP:Port/path
 	host    string // For HTTP Host header and SNI
 }
 
