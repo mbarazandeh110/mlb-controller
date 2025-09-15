@@ -18,8 +18,8 @@ type NginxConfig struct {
 	RequestTimeout     time.Duration     `mapstructure:"request_timeout"`
 	Protocol           string            `mapstructure:"protocol"` // http|https|grpc
 	Hostname           string            `mapstructure:"hostname,omitempty"`
-	CertFile           string            `mapstructure:"certfile,omitempty"`
-	KeyFile            string            `mapstructure:"keyfile,omitempty"`
+	CertFile           string            `mapstructure:"cert_file,omitempty"`
+	KeyFile            string            `mapstructure:"key_file,omitempty"`
 	CAFile             string            `mapstructure:"ca_file,omitempty"`
 	RequestPoolSize    int               `mapstructure:"request_pool_size"`
 }
