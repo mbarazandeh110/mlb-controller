@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"mlb-controller/internal/domain/config"
 	"mlb-controller/internal/util"
+	"net/url"
+	"strings"
 )
 
 // NginxValidator validates Nginx-specific configuration.
@@ -43,6 +45,16 @@ func (v *NginxValidator) validateNginxConfig(lb config.NginxConfig) error {
 		return fmt.Errorf("remove_api is required")
 	}
 
+	if !v.isValidRelativeURI(lb.ListAPI) {
+		return fmt.Errorf("list_api is invalid")
+	}
+	if !v.isValidRelativeURI(lb.AddAPI) {
+		return fmt.Errorf("add_api is invalid")
+	}
+	if !v.isValidRelativeURI(lb.RemoveAPI) {
+		return fmt.Errorf("remove_api is invalid")
+	}
+
 	// Validate timeouts
 	if lb.UpstreamSyncPeriod < 0 {
 		return fmt.Errorf("upstream_sync_period must be non-negative")
@@ -55,4 +67,25 @@ func (v *NginxValidator) validateNginxConfig(lb config.NginxConfig) error {
 	}
 
 	return nil
+}
+
+func (v *NginxValidator) isValidRelativeURI(s string) bool {
+	if !strings.HasPrefix(s, "/") {
+		return false
+	}
+
+	parsed, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+
+	if parsed.Scheme != "" || parsed.Host != "" {
+		return false
+	}
+
+	if parsed.Path == "" {
+		return false
+	}
+
+	return true
 }
