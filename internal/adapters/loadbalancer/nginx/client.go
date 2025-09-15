@@ -29,8 +29,8 @@ func NewNginxClientSet(ngx config.NginxConfig) ([]*NginxClient, error) {
 	}
 
 	// Handle HTTPS with client certificate if provided
-	if ngx.Protocol == "https" && ngx.CertFile != "" && ngx.KeyFile != "" {
-		cert, err := tls.X509KeyPair([]byte(ngx.CertFile), []byte(ngx.KeyFile))
+	if ngx.Protocol == "https" && len(ngx.Cert) > 0 && len(ngx.Key) > 0 {
+		cert, err := tls.X509KeyPair(ngx.Cert, ngx.Key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load client certificate: %w", err)
 		}
@@ -38,9 +38,9 @@ func NewNginxClientSet(ngx config.NginxConfig) ([]*NginxClient, error) {
 	}
 
 	// Handle CA certificate for server verification
-	if ngx.Protocol == "https" && ngx.CAFile != "" {
+	if ngx.Protocol == "https" && len(ngx.CA) > 0 {
 		caCertPool := x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM([]byte(ngx.CAFile)) {
+		if !caCertPool.AppendCertsFromPEM(ngx.CA) {
 			return nil, fmt.Errorf("failed to append CA certificate")
 		}
 		transport.TLSClientConfig.RootCAs = caCertPool

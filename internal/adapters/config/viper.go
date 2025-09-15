@@ -1,9 +1,11 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"mlb-controller/internal/adapters/validator"
 	domain "mlb-controller/internal/domain/config"
+	certificate_ports "mlb-controller/internal/ports/certificate"
 	config_ports "mlb-controller/internal/ports/config"
 	"reflect"
 	"strings"
@@ -14,14 +16,16 @@ import (
 )
 
 type ViperLoader struct {
-	path      string
-	validator config_ports.Validator
+	path       string
+	validator  config_ports.Validator
+	certLoader certificate_ports.CertificateLoader
 }
 
-func NewViperLoader(path string) *ViperLoader {
+func NewViperLoader(path string, certLoader certificate_ports.CertificateLoader) *ViperLoader {
 	return &ViperLoader{
-		path:      path,
-		validator: validator.NewCompositeValidator(),
+		path:       path,
+		validator:  validator.NewCompositeValidator(),
+		certLoader: certLoader,
 	}
 }
 
@@ -93,6 +97,15 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 			if err := mapstructureDecode(lbRaw, &nginxCfg); err != nil {
 				return nil, fmt.Errorf("unmarshal nginx config: %w", err)
 			}
+
+			certContent, err := l.loadCertificatesForLoadBalancer(context.Background(), nginxCfg.Name, nginxCfg.CertPath, nginxCfg.KeyPath, nginxCfg.CAPath, nginxCfg.GetHostName())
+			if err != nil {
+				return nil, err
+			}
+			nginxCfg.Cert = certContent.Cert
+			nginxCfg.Key = certContent.Key
+			nginxCfg.CA = certContent.CA
+
 			nginxCfg.Type = typeStr
 			cfg.LoadBalancers.LoadBalancers = append(cfg.LoadBalancers.LoadBalancers, nginxCfg)
 		case "envoy":
@@ -100,6 +113,15 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 			if err := mapstructureDecode(lbRaw, &envoyCfg); err != nil {
 				return nil, fmt.Errorf("unmarshal envoy config: %w", err)
 			}
+
+			certContent, err := l.loadCertificatesForLoadBalancer(context.Background(), envoyCfg.Name, envoyCfg.CertPath, envoyCfg.KeyPath, envoyCfg.CAPath, envoyCfg.GetHostName())
+			if err != nil {
+				return nil, err
+			}
+			envoyCfg.Cert = certContent.Cert
+			envoyCfg.Key = certContent.Key
+			envoyCfg.CA = certContent.CA
+
 			envoyCfg.Type = typeStr
 			cfg.LoadBalancers.LoadBalancers = append(cfg.LoadBalancers.LoadBalancers, envoyCfg)
 		default:
@@ -130,4 +152,18 @@ func mapstructureDecode(input interface{}, output interface{}) error {
 		return err
 	}
 	return decoder.Decode(input)
+}
+
+// Helper function to load certificates
+func (l *ViperLoader) loadCertificatesForLoadBalancer(ctx context.Context, configName, certPath, keyPath, caPath, hostname string) (*certificate_ports.CertificateContent, error) {
+	if certPath == "" || keyPath == "" {
+		return &certificate_ports.CertificateContent{}, nil
+	}
+
+	certContent, err := l.certLoader.Load(ctx, certPath, keyPath, caPath, hostname)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load certificates for %s '%s': %w", strings.ToLower(configName), configName, err)
+	}
+
+	return certContent, nil
 }

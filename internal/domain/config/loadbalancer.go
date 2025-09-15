@@ -16,9 +16,9 @@ type LoadBalancerConfig interface {
 	GetType() string
 	GetHostName() string
 	GetProtocol() string
-	GetCertFile() string
-	GetKeyFile() string
-	GetCAFile() string
+	GetCertPath() string
+	GetKeyPath() string
+	GetCAPath() string
 	GetRequestPoolSize() int
 	SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig
 }

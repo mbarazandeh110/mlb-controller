@@ -2,7 +2,8 @@ package di
 
 import (
 	"fmt"
-	"mlb-controller/internal/adapters/config"
+	certificate_adapter "mlb-controller/internal/adapters/certificate" // New import
+	config_adapter "mlb-controller/internal/adapters/config"
 	"mlb-controller/internal/adapters/logging"
 	"mlb-controller/internal/application"
 	config_ports "mlb-controller/internal/ports/config"
@@ -24,8 +25,11 @@ func NewContainer(configPath string) (*Container, error) {
 		return nil, fmt.Errorf("failed to initialize bootstrap logger: %w", err)
 	}
 
+	// Create a new certificate loader instance
+	certLoader := certificate_adapter.NewFileLoader() // New instance
+
 	// Load config to determine production logger settings
-	loader := config.NewViperLoader(configPath)
+	loader := config_adapter.NewViperLoader(configPath, certLoader) // Pass the new dependency here
 	cfg, err := loader.Load()
 	if err != nil {
 		bootstrapLogger.Fatal("Failed to load config", logging_ports.Field{Key: "error", Value: err})

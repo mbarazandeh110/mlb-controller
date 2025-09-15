@@ -4,6 +4,8 @@ package config
 import "time"
 
 // NginxConfig defines configuration for an Nginx load balancer.
+
+// NginxConfig defines configuration for an Nginx load balancer.
 type NginxConfig struct {
 	Type               string            `mapstructure:"type"` // must be "nginx"
 	Name               string            `mapstructure:"name"`
@@ -16,11 +18,14 @@ type NginxConfig struct {
 	UpstreamSyncPeriod time.Duration     `mapstructure:"upstream_sync_period"`
 	FailTimeout        time.Duration     `mapstructure:"fail_timeout"`
 	RequestTimeout     time.Duration     `mapstructure:"request_timeout"`
-	Protocol           string            `mapstructure:"protocol"` // http|https|grpc
+	Protocol           string            `mapstructure:"protocol"` // http|https
 	Hostname           string            `mapstructure:"hostname,omitempty"`
-	CertFile           string            `mapstructure:"cert_file,omitempty"`
-	KeyFile            string            `mapstructure:"key_file,omitempty"`
-	CAFile             string            `mapstructure:"ca_file,omitempty"`
+	CertPath           string            `mapstructure:"cert_path,omitempty"`
+	KeyPath            string            `mapstructure:"key_path,omitempty"`
+	CAPath             string            `mapstructure:"ca_path,omitempty"`
+	Cert               []byte            `mapstructure:"-"` // This will hold the content
+	Key                []byte            `mapstructure:"-"` // This will hold the content
+	CA                 []byte            `mapstructure:"-"` // This will hold the content
 	RequestPoolSize    int               `mapstructure:"request_pool_size"`
 }
 
@@ -31,9 +36,9 @@ func (c NginxConfig) GetIPReplacementList() IPReplacementList { return c.IPRepla
 func (c NginxConfig) GetType() string                         { return c.Type }
 func (c NginxConfig) GetHostName() string                     { return c.Hostname }
 func (c NginxConfig) GetProtocol() string                     { return c.Protocol }
-func (c NginxConfig) GetCertFile() string                     { return c.CertFile }
-func (c NginxConfig) GetKeyFile() string                      { return c.KeyFile }
-func (c NginxConfig) GetCAFile() string                       { return c.CAFile }
+func (c NginxConfig) GetCertPath() string                     { return c.CertPath }
+func (c NginxConfig) GetKeyPath() string                      { return c.KeyPath }
+func (c NginxConfig) GetCAPath() string                       { return c.CAPath }
 func (c NginxConfig) GetRequestPoolSize() int                 { return c.RequestPoolSize }
 
 func (c NginxConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig {

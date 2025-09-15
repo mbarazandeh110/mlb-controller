@@ -11,11 +11,14 @@ type EnvoyConfig struct {
 	Addresses          []AddressConfig   `mapstructure:"addresses"`
 	UpstreamSyncPeriod time.Duration     `mapstructure:"upstream_sync_period"`
 	RequestTimeout     time.Duration     `mapstructure:"request_timeout"`
-	Protocol           string            `mapstructure:"protocol"` // http|https|grpc
+	Protocol           string            `mapstructure:"protocol"` // grpc
 	Hostname           string            `mapstructure:"hostname,omitempty"`
-	CertFile           string            `mapstructure:"cert_file,omitempty"`
-	KeyFile            string            `mapstructure:"key_file,omitempty"`
-	CAFile             string            `mapstructure:"ca_file,omitempty"`
+	CertPath           string            `mapstructure:"cert_path,omitempty"`
+	KeyPath            string            `mapstructure:"key_path,omitempty"`
+	CAPath             string            `mapstructure:"ca_path,omitempty"`
+	Cert               []byte            `mapstructure:"-"` // This will hold the content
+	Key                []byte            `mapstructure:"-"` // This will hold the content
+	CA                 []byte            `mapstructure:"-"` // This will hold the content
 	RequestPoolSize    int               `mapstructure:"request_pool_size"`
 }
 
@@ -26,9 +29,9 @@ func (c EnvoyConfig) GetIPReplacementList() IPReplacementList { return c.IPRepla
 func (c EnvoyConfig) GetType() string                         { return c.Type }
 func (c EnvoyConfig) GetHostName() string                     { return c.Hostname }
 func (c EnvoyConfig) GetProtocol() string                     { return c.Protocol }
-func (c EnvoyConfig) GetCertFile() string                     { return c.CertFile }
-func (c EnvoyConfig) GetKeyFile() string                      { return c.KeyFile }
-func (c EnvoyConfig) GetCAFile() string                       { return c.CAFile }
+func (c EnvoyConfig) GetCertPath() string                     { return c.CertPath }
+func (c EnvoyConfig) GetKeyPath() string                      { return c.KeyPath }
+func (c EnvoyConfig) GetCAPath() string                       { return c.CAPath }
 func (c EnvoyConfig) GetRequestPoolSize() int                 { return c.RequestPoolSize }
 
 func (c EnvoyConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig {

@@ -66,7 +66,9 @@ loadbalancers:
     ip_replacement: true # default false
     update_period: 1s # default 1s
     protocol: http
-    hostname: 'test.com' # must be a valid domain name and required for https
+    # cert_path: "certs/example.test.crt"
+    # key_path: "certs/example.test.key"
+    hostname: 'example.test' # must be a valid domain name and required for https
     ip_replacement_list:
       nets:
         - source: 172.16.27.0 # must be a valid IP and all sources nets can not have overlap for example (172.16.20.0/24 and 172.16.22.0/24 from cdn1 and 172.16.27.0/24)
