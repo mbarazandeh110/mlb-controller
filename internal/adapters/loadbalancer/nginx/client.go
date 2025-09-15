@@ -8,11 +8,8 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 
 	"mlb-controller/internal/domain/config"
-
-	"github.com/cenkalti/backoff/v4"
 )
 
 // NginxClient handles HTTP/HTTPS requests to an NGINX API address.
@@ -86,7 +83,7 @@ func (c *NginxClient) doRequest(ctx context.Context, method, path string) ([]byt
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
+	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
 	}
@@ -97,27 +94,4 @@ func (c *NginxClient) doRequest(ctx context.Context, method, path string) ([]byt
 	}
 
 	return bodyBytes, nil
-}
-
-// doRequestWithRetry performs an HTTP request with retries using exponential backoff.
-func (c *NginxClient) doRequestWithRetry(ctx context.Context, method, path string) ([]byte, error) {
-	var body []byte
-	operation := func() error {
-		var err error
-		body, err = c.doRequest(ctx, method, path)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
-
-	// Configure exponential backoff
-	b := backoff.NewExponentialBackOff()
-	b.MaxElapsedTime = 30 * time.Second // Total retry duration
-	err := backoff.Retry(operation, backoff.WithContext(b, ctx))
-	if err != nil {
-		return nil, fmt.Errorf("failed after retries: %w", err)
-	}
-
-	return body, nil
 }

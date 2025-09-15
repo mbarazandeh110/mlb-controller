@@ -90,7 +90,7 @@ func (a *NginxAdapter) AddBackend(ctx context.Context, upstreamName string, back
 		} else {
 			path = fmt.Sprintf("dynamic?upstream=%s&server=%s:%d&weight=%d", url.QueryEscape(upstreamName), url.QueryEscape(backend.IP), backend.Port, weight)
 		}
-		_, err = client.doRequestWithRetry(ctx, "GET", path)
+		_, err = client.doRequest(ctx, "GET", path)
 		if err != nil {
 			errors = multierror.Append(errors, fmt.Errorf("client %s: failed to add/update backend %s:%d (weight=%d) to upstream %s: %w", client.baseURL, backend.IP, backend.Port, weight, upstreamName, err))
 		}
@@ -131,7 +131,7 @@ func (a *NginxAdapter) RemoveBackend(ctx context.Context, upstreamName string, b
 			weight = weight - 1
 			path = fmt.Sprintf("dynamic?upstream=%s&server=%s:%d&weight=%d", url.QueryEscape(upstreamName), url.QueryEscape(backend.IP), backend.Port, weight)
 		}
-		_, err = client.doRequestWithRetry(ctx, "GET", path)
+		_, err = client.doRequest(ctx, "GET", path)
 		if err != nil {
 			errors = multierror.Append(errors, fmt.Errorf("client %s: failed to remove/update backend %s:%d (weight=%d) from upstream %s: %w", client.baseURL, backend.IP, backend.Port, weight, upstreamName, err))
 		}
@@ -188,7 +188,7 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 		for _, backend := range desiredBackend {
 			if backend.Weight != -1 {
 				path := fmt.Sprintf("dynamic?upstream=%s&add=&server=%s:%d&weight=%d", url.QueryEscape(upstream.Name), url.QueryEscape(backend.IP), backend.Port, backend.Weight)
-				_, err = client.doRequestWithRetry(ctx, "GET", path)
+				_, err = client.doRequest(ctx, "GET", path)
 				if err != nil {
 					errors = multierror.Append(errors, fmt.Errorf("client %s: failed to add backend %s:%d (weight=%d) from upstream %s: %w", client.baseURL, backend.IP, backend.Port, backend.Weight, upstream.Name, err))
 				}
@@ -196,14 +196,14 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 		}
 		for _, backend := range updateBackends {
 			path := fmt.Sprintf("dynamic?upstream=%s&server=%s:%d&weight=%d", url.QueryEscape(upstream.Name), url.QueryEscape(backend.IP), backend.Port, backend.Weight)
-			_, err = client.doRequestWithRetry(ctx, "GET", path)
+			_, err = client.doRequest(ctx, "GET", path)
 			if err != nil {
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to update backend %s:%d (weight=%d) from upstream %s: %w", client.baseURL, backend.IP, backend.Port, backend.Weight, upstream.Name, err))
 			}
 		}
 		for _, backend := range removeBackends {
 			path := fmt.Sprintf("dynamic?upstream=%s&remove=&server=%s:%d&weight=%d", url.QueryEscape(upstream.Name), url.QueryEscape(backend.IP), backend.Port, backend.Weight)
-			_, err = client.doRequestWithRetry(ctx, "GET", path)
+			_, err = client.doRequest(ctx, "GET", path)
 			if err != nil {
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to remove backend %s:%d from upstream %s: %w", client.baseURL, backend.IP, backend.Port, upstream.Name, err))
 			}
@@ -254,7 +254,7 @@ func parseNginxBackends(response string) ([]model.Backend, error) {
 
 func (a *NginxAdapter) getCurrentBackends(ctx context.Context, client *NginxClient, upstreamName string) ([]model.Backend, error) {
 	path := fmt.Sprintf("dynamic?upstream=%s&verbose=", url.QueryEscape(upstreamName))
-	body, err := client.doRequestWithRetry(ctx, "GET", path)
+	body, err := client.doRequest(ctx, "GET", path)
 	if err != nil {
 		return nil, fmt.Errorf("client %s: failed to parse backends for upstream %s: %w", client.baseURL, upstreamName, err)
 	}
