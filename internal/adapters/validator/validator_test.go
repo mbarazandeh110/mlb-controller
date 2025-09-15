@@ -10,7 +10,7 @@ import (
 
 func TestNewCompositeValidator(t *testing.T) {
 	cv := NewCompositeValidator()
-	assert.Len(t, cv.validators, 9) // تعداد validators پیش‌فرض
+	assert.Len(t, cv.validators, 10)
 }
 
 func TestCompositeValidator_Validate(t *testing.T) {
