@@ -63,7 +63,7 @@ func (v *LoadBalancerValidator) validateAddresses(addresses []config.AddressConf
 func (v *LoadBalancerValidator) validateCert(lb config.LoadBalancerConfig) error {
 
 	if (lb.GetCertFile() != "" && lb.GetKeyFile() == "") || (lb.GetCertFile() == "" && lb.GetKeyFile() != "") {
-		return fmt.Errorf("loadbalancers.%s '%s': buth of CertFile and KeyFile are required: %s", lb.GetType(), lb.GetName(), lb.GetCertFile())
+		return fmt.Errorf("loadbalancers.%s '%s': buth of CertFile and KeyFile must be provided together: %s", lb.GetType(), lb.GetName(), lb.GetCertFile())
 	}
 	if lb.GetCertFile() != "" && !util.IsFileExists(lb.GetCertFile()) {
 		return fmt.Errorf("loadbalancers.%s '%s': the CertFile is not exist: %s", lb.GetType(), lb.GetName(), lb.GetCertFile())
