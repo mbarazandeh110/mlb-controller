@@ -39,9 +39,9 @@ func TestNewNginxClientSet(t *testing.T) {
 			Addresses:      []config.AddressConfig{{IP: "127.0.0.1", Port: 443}},
 			Protocol:       "https",
 			Hostname:       "localhost",
-			CertFile:       "cert", // Mock cert
-			KeyFile:        "key",  // Mock key
-			CAFile:         "ca",   // Mock CA
+			CertPath:       "cert", // Mock cert
+			KeyPath:        "key",  // Mock key
+			CAPath:         "ca",   // Mock CA
 			RequestTimeout: 5 * time.Second,
 		}
 		// Mock certificate loading (real certs not needed for test)
