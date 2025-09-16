@@ -6,11 +6,13 @@ import (
 	"testing"
 	"time"
 
+	certificate_adapter "mlb-controller/internal/adapters/certificate" // New import
+
 	"github.com/stretchr/testify/assert"
 )
 
 func TestNewViperLoader(t *testing.T) {
-	loader := NewViperLoader("test.yaml")
+	loader := NewViperLoader("test.yaml", certificate_adapter.NewFileLoader())
 	assert.Equal(t, "test.yaml", loader.path)
 	assert.NotNil(t, loader.validator)
 }
@@ -79,7 +81,7 @@ loadbalancers:
 	assert.NoError(t, err)
 	tmpFile.Close()
 
-	loader := NewViperLoader(tmpFile.Name())
+	loader := NewViperLoader(tmpFile.Name(), certificate_adapter.NewFileLoader())
 	cfg, err := loader.Load()
 	assert.NoError(t, err)
 	assert.NotNil(t, cfg)
@@ -87,7 +89,7 @@ loadbalancers:
 	assert.Len(t, cfg.LoadBalancers.LoadBalancers, 2)
 
 	// Test invalid config
-	loader = NewViperLoader("invalid.yaml")
+	loader = NewViperLoader("invalid.yaml", certificate_adapter.NewFileLoader())
 	_, err = loader.Load()
 	assert.Error(t, err)
 }
