@@ -1,9 +1,11 @@
+// cmd/mlb-controller/main.go
 package main
 
 import (
 	"context"
 	"flag"
 	"os"
+	"time"
 
 	"mlb-controller/internal/adapters/logging"
 	"mlb-controller/internal/di"
@@ -24,9 +26,14 @@ func main() {
 		tempLogger.Sync()
 		os.Exit(1)
 	}
+
+	// This defer block now handles graceful shutdown with a timeout.
+	// It creates a new context with a 5-second timeout for the Stop function.
 	defer func() {
-		if stopErr := container.App.Stop(); stopErr != nil {
-			container.Logger.Error("Failed to stop app", logging_ports.Field{Key: "error", Value: stopErr})
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if stopErr := container.App.Stop(shutdownCtx); stopErr != nil {
+			container.Logger.Error("Failed to stop app gracefully", logging_ports.Field{Key: "error", Value: stopErr})
 		}
 	}()
 
