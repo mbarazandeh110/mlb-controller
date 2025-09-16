@@ -31,8 +31,10 @@ func (a *App) Start(ctx context.Context) error {
 	// Load configuration
 	cfg, err := a.loader.Load()
 	if err != nil {
-		a.logger.Fatal("Failed to load config", logging_ports.Field{Key: "error", Value: err})
+		a.logger.Error("Failed to load config", logging_ports.Field{Key: "error", Value: err})
+		return err
 	}
+
 	a.config = cfg
 	a.logger.Info("Configuration loaded successfully", logging_ports.Field{Key: "app", Value: "mlb-controller"})
 
