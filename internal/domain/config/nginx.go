@@ -39,6 +39,7 @@ func (c NginxConfig) GetProtocol() string                     { return c.Protoco
 func (c NginxConfig) GetCertPath() string                     { return c.CertPath }
 func (c NginxConfig) GetKeyPath() string                      { return c.KeyPath }
 func (c NginxConfig) GetCAPath() string                       { return c.CAPath }
+func (c NginxConfig) GetRequestTimeOut() time.Duration        { return c.RequestTimeout }
 func (c NginxConfig) GetRequestPoolSize() int                 { return c.RequestPoolSize }
 
 func (c NginxConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig {

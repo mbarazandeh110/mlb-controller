@@ -32,6 +32,7 @@ func (c EnvoyConfig) GetProtocol() string                     { return c.Protoco
 func (c EnvoyConfig) GetCertPath() string                     { return c.CertPath }
 func (c EnvoyConfig) GetKeyPath() string                      { return c.KeyPath }
 func (c EnvoyConfig) GetCAPath() string                       { return c.CAPath }
+func (c EnvoyConfig) GetRequestTimeOut() time.Duration        { return c.RequestTimeout }
 func (c EnvoyConfig) GetRequestPoolSize() int                 { return c.RequestPoolSize }
 
 func (c EnvoyConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig {

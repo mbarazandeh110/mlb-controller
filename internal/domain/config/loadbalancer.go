@@ -20,6 +20,7 @@ type LoadBalancerConfig interface {
 	GetKeyPath() string
 	GetCAPath() string
 	GetRequestPoolSize() int
+	GetRequestTimeOut() time.Duration
 	SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig
 }
 

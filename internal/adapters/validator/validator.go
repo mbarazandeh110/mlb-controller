@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"mlb-controller/internal/domain/config"
 	config_ports "mlb-controller/internal/ports/config"
+	"time"
 )
 
 // CompositeValidator aggregates multiple validators.
@@ -46,15 +47,19 @@ func (cv *CompositeValidator) Validate(cfg *config.Config) error {
 type GlobalConfigValidator struct{}
 
 func (v *GlobalConfigValidator) Validate(cfg *config.Config) error {
-	if cfg.RequestPoolSize < 0 {
-		return fmt.Errorf("request_pool_size must be positive, got %d", cfg.RequestPoolSize)
+	if cfg.RequestPoolSize < 1 || cfg.RequestPoolSize > 100 {
+		return fmt.Errorf("request_pool_size must be between 1 and 100, got %d", cfg.RequestPoolSize)
 	}
 	if cfg.GlobalUpstreamSyncPeriod < 0 {
 		return fmt.Errorf("global_upstream_sync_period must be non-negative")
 	}
+
 	for _, lb := range cfg.LoadBalancers.LoadBalancers {
-		if lb.GetRequestPoolSize() <= 0 { // After defaults
-			return fmt.Errorf("loadbalancer '%s': request_pool_size must be positive (after fallback to global)", lb.GetName())
+		if lb.GetRequestPoolSize() < 1 || lb.GetRequestPoolSize() > 100 { // After defaults
+			return fmt.Errorf("loadbalancer '%s': request_pool_size must be between 1 and 100, got: %d", lb.GetName(), lb.GetRequestPoolSize())
+		}
+		if lb.GetRequestTimeOut() <= 0*time.Second { // After defaults
+			return fmt.Errorf("loadbalancer '%s': request_timeout must be non-negative, got: %d", lb.GetName(), lb.GetRequestTimeOut())
 		}
 	}
 	return nil
