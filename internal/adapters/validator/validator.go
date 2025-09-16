@@ -47,6 +47,9 @@ type GlobalConfigValidator struct{}
 
 func (v *GlobalConfigValidator) Validate(cfg *config.Config) error {
 	if cfg.GlobalUpstreamSyncPeriod < 0 {
+		return fmt.Errorf("global_upstream_sync_period must be at least 1s, got %v", cfg.GlobalUpstreamSyncPeriod)
+	}
+	if cfg.GlobalUpstreamSyncPeriod < 0 {
 		return fmt.Errorf("global_upstream_sync_period must be non-negative")
 	}
 	for _, lb := range cfg.LoadBalancers.LoadBalancers {
