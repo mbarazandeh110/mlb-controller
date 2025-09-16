@@ -374,7 +374,8 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 func parseNginxBackends(response string) ([]model.Backend, error) {
 	var backends []model.Backend
 	// Regex to match server lines with IP, port, weight, and optional parameters
-	re := regexp.MustCompile(`server\s+([\d.]+):(\d+)\s+weight=(\d+)(?:\s+max_fails=\d+)?(?:\s+fail_timeout=\d+(?:s)?)?(?:\s+(?:down|backup))*\s*;`)
+	// re := regexp.MustCompile(`server\s+([\d.]+):(\d+)(?:\s+weight=(\d+))?.*?;`) // ipv4
+	re := regexp.MustCompile(`server\s+([0-9a-fA-F.:\[\]]+):(\d+)(?:\s+weight=(\d+))?.*?;`) // ipv4,ipv6
 
 	// Split response into lines
 	lines := strings.Split(response, "\n")
