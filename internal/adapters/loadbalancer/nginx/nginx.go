@@ -260,7 +260,9 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 			desiredBackend[key] = tmpdb
 		} else {
 			// Initialize new backend with weight=1
-			db.Weight = 1
+			if db.Weight < 1 {
+				db.Weight = 1
+			}
 			desiredBackend[key] = db
 		}
 	}
