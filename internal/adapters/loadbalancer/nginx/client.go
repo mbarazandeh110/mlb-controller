@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"mlb-controller/internal/domain/config"
 )
@@ -29,21 +30,20 @@ func NewNginxClientSet(ngx config.NginxConfig) ([]*NginxClient, error) {
 	}
 
 	// Handle HTTPS with client certificate if provided
-	if ngx.Protocol == "https" && len(ngx.Cert) > 0 && len(ngx.Key) > 0 {
-		cert, err := tls.X509KeyPair(ngx.Cert, ngx.Key)
-		if err != nil {
-			return nil, fmt.Errorf("failed to load client certificate: %w", err)
-		}
+	if ngx.Protocol == "https" && len(ngx.Key) > 0 {
+		cert, _ := tls.X509KeyPair(ngx.Cert, ngx.Key)
 		transport.TLSClientConfig.Certificates = []tls.Certificate{cert}
+		// Parse certificate to perform additional validations
+		x509Cert, _ := x509.ParseCertificate(cert.Certificate[0])
+		// Check certificate expiration
+		if time.Now().After(x509Cert.NotAfter) {
+			return nil, fmt.Errorf("certificate %s has expired: NotAfter=%s", ngx.Hostname, x509Cert.NotAfter)
+		}
 	}
 
 	// Handle CA certificate for server verification
 	if ngx.Protocol == "https" && len(ngx.CA) > 0 {
-		caCertPool := x509.NewCertPool()
-		if !caCertPool.AppendCertsFromPEM(ngx.CA) {
-			return nil, fmt.Errorf("failed to append CA certificate")
-		}
-		transport.TLSClientConfig.RootCAs = caCertPool
+		transport.TLSClientConfig.RootCAs = x509.NewCertPool()
 	}
 
 	var clients []*NginxClient
