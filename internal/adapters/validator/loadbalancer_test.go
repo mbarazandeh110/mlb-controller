@@ -21,6 +21,7 @@ type mockLoadBalancerConfig struct {
 	keyPath           string
 	caPath            string
 	requestPoolSize   int
+	requestTimeOut    time.Duration
 }
 
 func (m *mockLoadBalancerConfig) GetName() string                      { return m.name }
@@ -29,13 +30,14 @@ func (m *mockLoadBalancerConfig) GetIPReplacement() bool               { return 
 func (m *mockLoadBalancerConfig) GetIPReplacementList() config.IPReplacementList {
 	return m.ipReplacementList
 }
-func (m *mockLoadBalancerConfig) GetType() string         { return m.lbType }
-func (m *mockLoadBalancerConfig) GetHostName() string     { return m.hostname }
-func (m *mockLoadBalancerConfig) GetProtocol() string     { return "https" }
-func (m *mockLoadBalancerConfig) GetCertPath() string     { return m.certPath }
-func (m *mockLoadBalancerConfig) GetKeyPath() string      { return m.keyPath }
-func (m *mockLoadBalancerConfig) GetCAPath() string       { return m.caPath }
-func (m *mockLoadBalancerConfig) GetRequestPoolSize() int { return m.requestPoolSize }
+func (m *mockLoadBalancerConfig) GetType() string                  { return m.lbType }
+func (m *mockLoadBalancerConfig) GetHostName() string              { return m.hostname }
+func (m *mockLoadBalancerConfig) GetProtocol() string              { return "https" }
+func (m *mockLoadBalancerConfig) GetCertPath() string              { return m.certPath }
+func (m *mockLoadBalancerConfig) GetKeyPath() string               { return m.keyPath }
+func (m *mockLoadBalancerConfig) GetCAPath() string                { return m.caPath }
+func (m *mockLoadBalancerConfig) GetRequestPoolSize() int          { return m.requestPoolSize }
+func (m *mockLoadBalancerConfig) GetRequestTimeOut() time.Duration { return m.requestTimeOut }
 func (m *mockLoadBalancerConfig) SetDefaults(time.Duration, int) config.LoadBalancerConfig {
 	return m
 }

@@ -34,8 +34,11 @@ func TestGlobalConfigValidator_Validate(t *testing.T) {
 		expectError bool
 		errorMsg    string
 	}{
-		{"Valid", &config.Config{GlobalUpstreamSyncPeriod: 10 * time.Second}, false, ""},
-		{"Negative Period", &config.Config{GlobalUpstreamSyncPeriod: -10 * time.Second}, true, "must be non-negative"},
+		{"Valid", &config.Config{GlobalUpstreamSyncPeriod: 10 * time.Second, RequestPoolSize: 10}, false, ""},
+		{"Negative Period", &config.Config{GlobalUpstreamSyncPeriod: -10 * time.Second, RequestPoolSize: 10}, true, "must be non-negative"},
+		{"Valid", &config.Config{GlobalUpstreamSyncPeriod: 10 * time.Second, RequestPoolSize: 0}, true, "request_pool_size must be between 1 and 100"},
+		{"Valid", &config.Config{GlobalUpstreamSyncPeriod: 10 * time.Second, RequestPoolSize: 101}, true, "request_pool_size must be between 1 and 100"},
+		{"Valid", &config.Config{GlobalUpstreamSyncPeriod: 10 * time.Second, RequestPoolSize: 10}, false, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
