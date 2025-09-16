@@ -2,6 +2,7 @@ package certificate
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
@@ -140,10 +141,10 @@ func validateCertKey(certPath, keyPath, hostname string) error {
 
 	// Check certificate expiration
 	if time.Now().After(x509Cert.NotAfter) {
-		return fmt.Errorf("certificate has expired: NotAfter=%s", x509Cert.NotAfter)
+		return fmt.Errorf("certificate %s has expired: NotAfter=%s", certPath, x509Cert.NotAfter)
 	}
 	if time.Now().Before(x509Cert.NotBefore) {
-		return fmt.Errorf("certificate is not yet valid: NotBefore=%s", x509Cert.NotBefore)
+		return fmt.Errorf("certificate %s is not yet valid: NotBefore=%s", certPath, x509Cert.NotBefore)
 	}
 
 	// Verify hostname if provided
@@ -153,11 +154,19 @@ func validateCertKey(certPath, keyPath, hostname string) error {
 		}
 	}
 
-	// Check key strength (e.g., RSA key length >= 2048 bits)
-	if x509Cert.PublicKeyAlgorithm == x509.RSA {
-		if rsaKey, ok := x509Cert.PublicKey.(*rsa.PublicKey); ok && rsaKey.N.BitLen() < 2048 {
-			return fmt.Errorf("certificate uses insecure RSA key length: %d bits (minimum 2048 required)", rsaKey.N.BitLen())
+	// Check key strength
+	switch pubKey := x509Cert.PublicKey.(type) {
+	case *rsa.PublicKey:
+		if pubKey.N.BitLen() < 2048 {
+			return fmt.Errorf("certificate uses insecure RSA key length: %d bits (minimum 2048 required)", pubKey.N.BitLen())
 		}
+	case *ecdsa.PublicKey:
+		bitLen := pubKey.Curve.Params().BitSize
+		if bitLen < 256 { // Minimum for P-256
+			return fmt.Errorf("certificate uses insecure ECDSA key length: %d bits (minimum 256 required)", bitLen)
+		}
+	default:
+		return fmt.Errorf("unsupported public key type: %T", x509Cert.PublicKey)
 	}
 
 	return nil
