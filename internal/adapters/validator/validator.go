@@ -46,8 +46,8 @@ func (cv *CompositeValidator) Validate(cfg *config.Config) error {
 type GlobalConfigValidator struct{}
 
 func (v *GlobalConfigValidator) Validate(cfg *config.Config) error {
-	if cfg.GlobalUpstreamSyncPeriod < 0 {
-		return fmt.Errorf("global_upstream_sync_period must be at least 1s, got %v", cfg.GlobalUpstreamSyncPeriod)
+	if cfg.RequestPoolSize < 0 {
+		return fmt.Errorf("request_pool_size must be positive, got %d", cfg.RequestPoolSize)
 	}
 	if cfg.GlobalUpstreamSyncPeriod < 0 {
 		return fmt.Errorf("global_upstream_sync_period must be non-negative")
