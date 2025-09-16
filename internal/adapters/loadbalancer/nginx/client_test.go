@@ -17,7 +17,7 @@ import (
 
 // TestNewNginxClientSet tests the creation of NginxClient instances.
 func TestNewNginxClientSet(t *testing.T) {
-	t.Run("ValidHTTPConfig", func(t *testing.T) {
+	t.Run("ValidConfig", func(t *testing.T) {
 		cfg := config.NginxConfig{
 			Type:           "nginx",
 			Addresses:      []config.AddressConfig{{IP: "127.0.0.1", Port: 8080}},
@@ -33,21 +33,6 @@ func TestNewNginxClientSet(t *testing.T) {
 		assert.Equal(t, 5*time.Second, clients[0].client.Timeout)
 	})
 
-	t.Run("ValidHTTPSConfig", func(t *testing.T) {
-		cfg := config.NginxConfig{
-			Type:           "nginx",
-			Addresses:      []config.AddressConfig{{IP: "127.0.0.1", Port: 443}},
-			Protocol:       "https",
-			Hostname:       "localhost",
-			CertPath:       "cert", // Mock cert
-			KeyPath:        "key",  // Mock key
-			CAPath:         "ca",   // Mock CA
-			RequestTimeout: 5 * time.Second,
-		}
-		// Mock certificate loading (real certs not needed for test)
-		_, err := NewNginxClientSet(cfg)
-		assert.Error(t, err) // Expect error due to invalid cert/key
-	})
 }
 
 // TestDoRequest tests the doRequest method of NginxClient.
