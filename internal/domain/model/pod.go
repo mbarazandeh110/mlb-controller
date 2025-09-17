@@ -13,4 +13,6 @@ type Pod struct {
 	IP string
 	// Status is the pod's status (e.g., Running, Terminating).
 	Status string
+	// Ready is the pod's readiness status.
+	Ready bool
 }
