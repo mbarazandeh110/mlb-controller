@@ -6,18 +6,22 @@ import (
 	certificate_adapter "mlb-controller/internal/adapters/certificate"
 	config_adapter "mlb-controller/internal/adapters/config"
 	"mlb-controller/internal/adapters/logging"
-	metrics_adapter "mlb-controller/internal/adapters/metrics" // New import
+	metrics_adapter "mlb-controller/internal/adapters/metrics"
 	"mlb-controller/internal/application"
 	config_ports "mlb-controller/internal/ports/config"
 	logging_ports "mlb-controller/internal/ports/logging"
-	metrics_ports "mlb-controller/internal/ports/metrics" // New import
+	metrics_ports "mlb-controller/internal/ports/metrics"
+
+	kube_adapter "mlb-controller/internal/adapters/kubernetes"
+	kube_ports "mlb-controller/internal/ports/kubernetes"
 )
 
 // Container holds dependencies for the application.
 type Container struct {
 	Logger  logging_ports.Logger
 	Loader  config_ports.Loader
-	Metrics metrics_ports.Metrics // New field
+	Metrics metrics_ports.Metrics
+	Kube    kube_ports.KubernetesAdapter
 	App     *application.App
 }
 
@@ -50,13 +54,20 @@ func NewContainer(configPath string) (*Container, error) {
 	// Initialize metrics adapter
 	metricsAdapter := metrics_adapter.NewPrometheusAdapter()
 
+	// Initialize Kubernetes adapter
+	kubeAdapter, err := kube_adapter.NewKubernetesClient(prodLogger, cfg.Kubernetes) // تغییر اینجا است
+	if err != nil {
+		prodLogger.Fatal("Failed to initialize kubernetes client", logging_ports.Field{Key: "error", Value: err})
+	}
+
 	// Create App
-	app := application.NewApp(prodLogger, loader, metricsAdapter) // Pass metricsAdapter to NewApp
+	app := application.NewApp(prodLogger, loader, metricsAdapter, kubeAdapter) // Pass kubeAdapter to NewApp
 
 	return &Container{
 		Logger:  prodLogger,
 		Loader:  loader,
 		Metrics: metricsAdapter,
+		Kube:    kubeAdapter,
 		App:     app,
 	}, nil
 }

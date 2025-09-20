@@ -3,30 +3,34 @@ package application
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
 	domain "mlb-controller/internal/domain/config"
 	config_ports "mlb-controller/internal/ports/config"
+	kube_ports "mlb-controller/internal/ports/kubernetes"
 	logging_ports "mlb-controller/internal/ports/logging"
-	metrics_ports "mlb-controller/internal/ports/metrics" // New import
+	metrics_ports "mlb-controller/internal/ports/metrics"
 )
 
 // App is the main application struct that orchestrates the controller logic.
 type App struct {
 	logger  logging_ports.Logger
 	loader  config_ports.Loader
-	metrics metrics_ports.Metrics // New field
+	metrics metrics_ports.Metrics
+	kube    kube_ports.KubernetesAdapter
 	config  *domain.Config
 }
 
 // NewApp creates a new App instance.
-func NewApp(logger logging_ports.Logger, loader config_ports.Loader, metrics metrics_ports.Metrics) *App {
+func NewApp(logger logging_ports.Logger, loader config_ports.Loader, metrics metrics_ports.Metrics, kube kube_ports.KubernetesAdapter) *App {
 	return &App{
 		logger:  logger,
 		loader:  loader,
 		metrics: metrics,
+		kube:    kube,
 	}
 }
 
@@ -50,6 +54,20 @@ func (a *App) Start(ctx context.Context) error {
 		}
 		a.logger.Info("Metrics server started", logging_ports.Field{Key: "port", Value: a.config.Metrics.Port}, logging_ports.Field{Key: "uri", Value: a.config.Metrics.URI})
 	}
+
+	// Start Kubernetes informers
+	if err := a.kube.StartInformer(ctx); err != nil {
+		a.logger.Error("Failed to start Kubernetes informers", logging_ports.Field{Key: "error", Value: err})
+		return err
+	}
+	a.logger.Info("Kubernetes informers started")
+
+	// Wait for informer caches to be synced
+	if ok := a.kube.WaitForCacheSync(ctx); !ok {
+		a.logger.Error("Failed to sync Kubernetes caches")
+		return fmt.Errorf("failed to sync kubernetes caches")
+	}
+	a.logger.Info("Kubernetes caches synced successfully")
 
 	// Wait for shutdown signal
 	sigCh := make(chan os.Signal, 1)
