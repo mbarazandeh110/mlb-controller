@@ -14,5 +14,6 @@ type Pod struct {
 	// Status is the pod's status (e.g., Running, Terminating).
 	Status string
 	// Ready is the pod's readiness status.
-	Ready bool
+	Ready  bool
+	Labels map[string]string
 }

@@ -40,7 +40,7 @@ func (c EnvoyConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration, globalR
 		c.UpstreamSyncPeriod = globalUpstreamSyncPeriod
 	}
 	if c.RequestTimeout == 0 {
-		c.RequestTimeout = 30 * time.Second
+		c.RequestTimeout = RequestTimeOut
 	}
 	if c.RequestPoolSize == 0 {
 		c.RequestPoolSize = globalRequestPoolSize

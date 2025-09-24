@@ -28,7 +28,12 @@ type Metrics interface {
 	NewCounter(name, help string, labels []string) Counter
 	NewGauge(name, help string, labels []string) Gauge
 	NewHistogram(name, help string, labels []string) Histogram
-	Start(port int, uri string) error
+	Start() error
 	// Stop gracefully shuts down the metrics server.
 	Stop(ctx context.Context) error
+	ProxyToLeader(ctx context.Context) error
+	// Metrics-specific methods
+	UpdateBackendsTotal(upstream string, count float64)
+	IncrementSyncErrors(upstream string)
+	ObserveSyncDuration(upstream string, duration float64)
 }

@@ -11,6 +11,7 @@ import (
 
 	"mlb-controller/internal/domain/config"
 	"mlb-controller/internal/domain/model"
+	"mlb-controller/internal/ports/logging"
 
 	"github.com/hashicorp/go-multierror"
 	"golang.org/x/sync/semaphore"
@@ -21,12 +22,12 @@ import (
 type NginxAdapter struct {
 	clients   []*NginxClient            // List of NGINX clients for each address
 	config    config.LoadBalancerConfig // Load balancer configuration
+	logger    logging.Logger            // Logger for logging operations
 	semaphore *semaphore.Weighted       // Semaphore to limit concurrent requests
 }
 
 // NewNginxAdapter creates a new NginxAdapter for the given LoadBalancerConfig.
-// It validates the configuration type, initializes NGINX clients, and sets up the semaphore.
-func NewNginxAdapter(cfg config.NginxConfig) (*NginxAdapter, error) {
+func NewNginxAdapter(cfg config.NginxConfig, logger logging.Logger) (*NginxAdapter, error) {
 	// Validate that the configuration type is "nginx"
 	if cfg.GetType() != "nginx" {
 		return nil, fmt.Errorf("invalid load balancer type: %s, expected nginx", cfg.GetType())
@@ -45,6 +46,7 @@ func NewNginxAdapter(cfg config.NginxConfig) (*NginxAdapter, error) {
 	return &NginxAdapter{
 		clients:   clients,
 		config:    cfg,
+		logger:    logger,
 		semaphore: sem,
 	}, nil
 }
@@ -71,6 +73,9 @@ func (a *NginxAdapter) ListBackends(ctx context.Context, upstreamName string) (m
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to acquire semaphore: %w", client.baseURL, err))
 				mu.Unlock()
+				a.logger.Error("Failed to acquire semaphore",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "error", Value: err})
 				return
 			}
 			defer a.semaphore.Release(1) // Release semaphore slot after completion
@@ -82,6 +87,10 @@ func (a *NginxAdapter) ListBackends(ctx context.Context, upstreamName string) (m
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to parse backends for upstream %s: %w", client.baseURL, upstreamName, err))
 				mu.Unlock()
+				a.logger.Error("Failed to parse backends",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "upstream", Value: upstreamName},
+					logging.Field{Key: "error", Value: err})
 				return
 			}
 
@@ -89,6 +98,10 @@ func (a *NginxAdapter) ListBackends(ctx context.Context, upstreamName string) (m
 			mu.Lock()
 			clientBackends[client.baseURL] = currentBackends
 			mu.Unlock()
+			a.logger.Info("Retrieved backends",
+				logging.Field{Key: "client", Value: client.baseURL},
+				logging.Field{Key: "upstream", Value: upstreamName},
+				logging.Field{Key: "backends", Value: len(currentBackends)})
 		}(client)
 	}
 
@@ -119,6 +132,9 @@ func (a *NginxAdapter) AddBackend(ctx context.Context, upstreamName string, back
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to acquire semaphore: %w", client.baseURL, err))
 				mu.Unlock()
+				a.logger.Error("Failed to acquire semaphore",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "error", Value: err})
 				return
 			}
 			defer a.semaphore.Release(1) // Release semaphore slot after completion
@@ -130,6 +146,10 @@ func (a *NginxAdapter) AddBackend(ctx context.Context, upstreamName string, back
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to parse backends for upstream %s: %w", client.baseURL, upstreamName, err))
 				mu.Unlock()
+				a.logger.Error("Failed to parse backends",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "upstream", Value: upstreamName},
+					logging.Field{Key: "error", Value: err})
 				return
 			}
 
@@ -159,6 +179,17 @@ func (a *NginxAdapter) AddBackend(ctx context.Context, upstreamName string, back
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to add/update backend %s:%d (weight=%d) to upstream %s: %w", client.baseURL, backend.IP, backend.Port, weight, upstreamName, err))
 				mu.Unlock()
+				a.logger.Error("Failed to add/update backend",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "upstream", Value: upstreamName},
+					logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
+					logging.Field{Key: "error", Value: err})
+			} else {
+				a.logger.Info("Backend added/updated",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "upstream", Value: upstreamName},
+					logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
+					logging.Field{Key: "weight", Value: weight})
 			}
 		}(client)
 	}
@@ -188,6 +219,9 @@ func (a *NginxAdapter) RemoveBackend(ctx context.Context, upstreamName string, b
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to acquire semaphore: %w", client.baseURL, err))
 				mu.Unlock()
+				a.logger.Error("Failed to acquire semaphore",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "error", Value: err})
 				return
 			}
 			defer a.semaphore.Release(1) // Release semaphore slot after completion
@@ -199,6 +233,10 @@ func (a *NginxAdapter) RemoveBackend(ctx context.Context, upstreamName string, b
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to parse backends for upstream %s: %w", client.baseURL, upstreamName, err))
 				mu.Unlock()
+				a.logger.Error("Failed to parse backends",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "upstream", Value: upstreamName},
+					logging.Field{Key: "error", Value: err})
 				return
 			}
 
@@ -216,6 +254,10 @@ func (a *NginxAdapter) RemoveBackend(ctx context.Context, upstreamName string, b
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("backend %s:%d not found in upstream %s", backend.IP, backend.Port, upstreamName))
 				mu.Unlock()
+				a.logger.Warn("Backend not found",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "upstream", Value: upstreamName},
+					logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)})
 				return
 			}
 
@@ -237,6 +279,17 @@ func (a *NginxAdapter) RemoveBackend(ctx context.Context, upstreamName string, b
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to remove/update backend %s:%d (weight=%d) from upstream %s: %w", client.baseURL, backend.IP, backend.Port, weight, upstreamName, err))
 				mu.Unlock()
+				a.logger.Error("Failed to remove/update backend",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "upstream", Value: upstreamName},
+					logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
+					logging.Field{Key: "error", Value: err})
+			} else {
+				a.logger.Info("Backend removed/updated",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "upstream", Value: upstreamName},
+					logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
+					logging.Field{Key: "weight", Value: weight})
 			}
 		}(client)
 	}
@@ -283,6 +336,9 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to acquire semaphore: %w", client.baseURL, err))
 				mu.Unlock()
+				a.logger.Error("Failed to acquire semaphore",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "error", Value: err})
 				return
 			}
 			defer a.semaphore.Release(1) // Release semaphore slot after completion
@@ -294,6 +350,10 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 				mu.Lock()
 				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to parse backends for upstream %s: %w", client.baseURL, upstream.Name, err))
 				mu.Unlock()
+				a.logger.Error("Failed to parse backends",
+					logging.Field{Key: "client", Value: client.baseURL},
+					logging.Field{Key: "upstream", Value: upstream.Name},
+					logging.Field{Key: "error", Value: err})
 				return
 			}
 
@@ -336,6 +396,17 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 						mu.Lock()
 						errors = multierror.Append(errors, fmt.Errorf("client %s: failed to add backend %s:%d (weight=%d) from upstream %s: %w", client.baseURL, backend.IP, backend.Port, backend.Weight, upstream.Name, err))
 						mu.Unlock()
+						a.logger.Error("Failed to add backend",
+							logging.Field{Key: "client", Value: client.baseURL},
+							logging.Field{Key: "upstream", Value: upstream.Name},
+							logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
+							logging.Field{Key: "error", Value: err})
+					} else {
+						a.logger.Info("Backend added",
+							logging.Field{Key: "client", Value: client.baseURL},
+							logging.Field{Key: "upstream", Value: upstream.Name},
+							logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
+							logging.Field{Key: "weight", Value: backend.Weight})
 					}
 				}
 			}
@@ -349,6 +420,17 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 					mu.Lock()
 					errors = multierror.Append(errors, fmt.Errorf("client %s: failed to update backend %s:%d (weight=%d) from upstream %s: %w", client.baseURL, backend.IP, backend.Port, backend.Weight, upstream.Name, err))
 					mu.Unlock()
+					a.logger.Error("Failed to update backend",
+						logging.Field{Key: "client", Value: client.baseURL},
+						logging.Field{Key: "upstream", Value: upstream.Name},
+						logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
+						logging.Field{Key: "error", Value: err})
+				} else {
+					a.logger.Info("Backend updated",
+						logging.Field{Key: "client", Value: client.baseURL},
+						logging.Field{Key: "upstream", Value: upstream.Name},
+						logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
+						logging.Field{Key: "weight", Value: backend.Weight})
 				}
 			}
 
@@ -361,6 +443,16 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 					mu.Lock()
 					errors = multierror.Append(errors, fmt.Errorf("client %s: failed to remove backend %s:%d from upstream %s: %w", client.baseURL, backend.IP, backend.Port, upstream.Name, err))
 					mu.Unlock()
+					a.logger.Error("Failed to remove backend",
+						logging.Field{Key: "client", Value: client.baseURL},
+						logging.Field{Key: "upstream", Value: upstream.Name},
+						logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
+						logging.Field{Key: "error", Value: err})
+				} else {
+					a.logger.Info("Backend removed",
+						logging.Field{Key: "client", Value: client.baseURL},
+						logging.Field{Key: "upstream", Value: upstream.Name},
+						logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)})
 				}
 			}
 		}(client)
