@@ -205,4 +205,3 @@ Contributions are welcome! Please:
 ---
 
 **Keep your CDN in sync with your cluster — automatically.**
-```
