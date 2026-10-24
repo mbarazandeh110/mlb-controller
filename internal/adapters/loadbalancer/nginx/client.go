@@ -41,20 +41,21 @@ func NewNginxClientSet(ngx config.NginxConfig) ([]*NginxClient, error) {
 		},
 	}
 
-	if ngx.Protocol == "https" && len(ngx.Key) > 0 {
+	if ngx.Protocol == "https" && (len(ngx.Cert) > 0 || len(ngx.Key) > 0) {
 		cert, err := tls.X509KeyPair(ngx.Cert, ngx.Key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to load client certificate/key: %w", err)
 		}
+		if len(cert.Certificate) == 0 {
+			return nil, fmt.Errorf("empty certificate chain for host: %s", ngx.Hostname)
+		}
 		transport.TLSClientConfig.Certificates = []tls.Certificate{cert}
-		if len(cert.Certificate) > 0 {
-			x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
-			if err != nil {
-				return nil, fmt.Errorf("failed to parse client certificate: %w", err)
-			}
-			if time.Now().After(x509Cert.NotAfter) {
-				return nil, fmt.Errorf("certificate %s has expired: NotAfter=%s", ngx.Hostname, x509Cert.NotAfter)
-			}
+		x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse client certificate: %w", err)
+		}
+		if time.Now().After(x509Cert.NotAfter) {
+			return nil, fmt.Errorf("certificate %s has expired: NotAfter=%s", ngx.Hostname, x509Cert.NotAfter)
 		}
 	}
 

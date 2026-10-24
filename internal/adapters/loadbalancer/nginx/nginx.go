@@ -4,8 +4,9 @@ package nginx
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/url"
-	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -65,7 +66,7 @@ func (a *NginxAdapter) refreshCache(ctx context.Context, client *NginxClient) (m
 	path := strings.TrimPrefix(a.config.ListAPI, "/")
 	body, err := client.doRequest(ctx, "GET", path)
 	if err != nil {
-		return nil, fmt.Errorf("failed to bulk fetch upstreams: %w", err)
+		return nil, fmt.Errorf("failed to bulk fetch upstreams from %s: %w", client.baseURL, err)
 	}
 
 	parsedState := parseBulkNginxBackends(string(body))
@@ -85,9 +86,10 @@ func (a *NginxAdapter) invalidateCache(clientBaseURL string) {
 }
 
 func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream) error {
+	// Aggregate duplicate backends (e.g. multiple Pods on the same Node) by incrementing weight
 	desiredBackend := make(map[string]model.Backend)
 	for _, db := range upstream.Backends {
-		key := fmt.Sprintf("%s:%d", db.IP, db.Port)
+		key := backendKey(db)
 		if tmpdb, exists := desiredBackend[key]; exists {
 			tmpdb.Weight += 1
 			desiredBackend[key] = tmpdb
@@ -123,7 +125,12 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 				mu.Unlock()
 				return
 			}
+
+			// Get current backends for this upstream (support both named and single flat format)
 			currentBackends := allBackends[upstream.Name]
+			if len(currentBackends) == 0 && len(allBackends[""]) > 0 {
+				currentBackends = allBackends[""]
+			}
 
 			updateBackends := make(map[string]model.Backend)
 			removeBackends := make(map[string]model.Backend)
@@ -132,7 +139,7 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 			for key, db := range desiredBackend {
 				matched := false
 				for _, cb := range currentBackends {
-					if db.IP == cb.IP && db.Port == cb.Port {
+					if sameBackend(db, cb) {
 						matched = true
 						if cb.Weight != db.Weight {
 							updateBackends[key] = db
@@ -148,40 +155,87 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 			}
 
 			for _, cb := range currentBackends {
-				if _, exists := desiredBackend[fmt.Sprintf("%s:%d", cb.IP, cb.Port)]; !exists {
-					removeBackends[fmt.Sprintf("%s:%d", cb.IP, cb.Port)] = cb
+				key := backendKey(cb)
+				if _, exists := desiredBackend[key]; !exists {
+					removeBackends[key] = cb
 					changed = true
 				}
 			}
 
-			// Add/Update
-			for _, backend := range updateBackends {
-				path := fmt.Sprintf("%s?upstream=%s&server=%s:%d&weight=%d",
+			// Deterministic ordering for add/update requests
+			updateKeys := make([]string, 0, len(updateBackends))
+			for k := range updateBackends {
+				updateKeys = append(updateKeys, k)
+			}
+			sort.Strings(updateKeys)
+
+			for _, k := range updateKeys {
+				backend := updateBackends[k]
+				serverAddr := formatServerAddr(backend.IP, backend.Port)
+				path := fmt.Sprintf("%s?upstream=%s&server=%s&weight=%d",
 					strings.TrimPrefix(a.config.AddAPI, "/"),
 					url.QueryEscape(upstream.Name),
-					url.QueryEscape(backend.IP),
-					backend.Port,
+					url.QueryEscape(serverAddr),
 					backend.Weight)
 
+				a.logger.Debug("Syncing backend to NGINX",
+					logging.Field{Key: "client", Value: c.baseURL},
+					logging.Field{Key: "upstream", Value: upstream.Name},
+					logging.Field{Key: "backend", Value: serverAddr},
+					logging.Field{Key: "weight", Value: backend.Weight})
+
 				if _, err := c.doRequest(ctx, "GET", path); err != nil {
+					a.logger.Error("Failed to add/update backend on NGINX",
+						logging.Field{Key: "client", Value: c.baseURL},
+						logging.Field{Key: "upstream", Value: upstream.Name},
+						logging.Field{Key: "backend", Value: serverAddr},
+						logging.Field{Key: "error", Value: err})
 					mu.Lock()
 					errors = multierror.Append(errors, fmt.Errorf("client %s add failed: %w", c.baseURL, err))
 					mu.Unlock()
+				} else {
+					a.logger.Info("Successfully synced backend to NGINX",
+						logging.Field{Key: "client", Value: c.baseURL},
+						logging.Field{Key: "upstream", Value: upstream.Name},
+						logging.Field{Key: "backend", Value: serverAddr},
+						logging.Field{Key: "weight", Value: backend.Weight})
 				}
 			}
 
-			// Remove
-			for _, backend := range removeBackends {
-				path := fmt.Sprintf("%s?upstream=%s&server=%s:%d",
+			// Deterministic ordering for remove requests
+			removeKeys := make([]string, 0, len(removeBackends))
+			for k := range removeBackends {
+				removeKeys = append(removeKeys, k)
+			}
+			sort.Strings(removeKeys)
+
+			for _, k := range removeKeys {
+				backend := removeBackends[k]
+				serverAddr := formatServerAddr(backend.IP, backend.Port)
+				path := fmt.Sprintf("%s?upstream=%s&server=%s",
 					strings.TrimPrefix(a.config.RemoveAPI, "/"),
 					url.QueryEscape(upstream.Name),
-					url.QueryEscape(backend.IP),
-					backend.Port)
+					url.QueryEscape(serverAddr))
+
+				a.logger.Debug("Removing backend from NGINX",
+					logging.Field{Key: "client", Value: c.baseURL},
+					logging.Field{Key: "upstream", Value: upstream.Name},
+					logging.Field{Key: "backend", Value: serverAddr})
 
 				if _, err := c.doRequest(ctx, "GET", path); err != nil {
+					a.logger.Error("Failed to remove backend from NGINX",
+						logging.Field{Key: "client", Value: c.baseURL},
+						logging.Field{Key: "upstream", Value: upstream.Name},
+						logging.Field{Key: "backend", Value: serverAddr},
+						logging.Field{Key: "error", Value: err})
 					mu.Lock()
 					errors = multierror.Append(errors, fmt.Errorf("client %s remove failed: %w", c.baseURL, err))
 					mu.Unlock()
+				} else {
+					a.logger.Info("Successfully removed backend from NGINX",
+						logging.Field{Key: "client", Value: c.baseURL},
+						logging.Field{Key: "upstream", Value: upstream.Name},
+						logging.Field{Key: "backend", Value: serverAddr})
 				}
 			}
 
@@ -196,7 +250,7 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 }
 
 // پیاده‌سازی اصلی Two-Way Reconciliation برای مقابله با State Drift
-// این متد باید توسط کنترلر در بازه‌های زمانی مشخص فراخوانی شود تا آپ‌استریم‌هایی که از K8s پاک شده‌اند، از NGINX نیز حذف شوند.
+// این متد توسط کنترلر در بازه‌های زمانی مشخص فراخوانی می‌شود تا آپ‌استریم‌هایی که از K8s پاک شده‌اند، از NGINX نیز حذف شوند.
 func (a *NginxAdapter) SyncAllUpstreams(ctx context.Context, desiredUpstreams map[string]model.Upstream) error {
 	var errors *multierror.Error
 	var mu sync.Mutex
@@ -223,25 +277,49 @@ func (a *NginxAdapter) SyncAllUpstreams(ctx context.Context, desiredUpstreams ma
 				return
 			}
 
+			// Sort upstream names for deterministic processing
+			upstreamNames := make([]string, 0, len(allNginxUpstreams))
+			for name := range allNginxUpstreams {
+				upstreamNames = append(upstreamNames, name)
+			}
+			sort.Strings(upstreamNames)
+
 			// یافتن آپ‌استریم‌های یتیم (Orphaned) که در NGINX هستند اما در K8s وجود ندارند یا بدون Backend هستند
 			changed := false
-			for upstreamName, backends := range allNginxUpstreams {
+			for _, upstreamName := range upstreamNames {
+				if upstreamName == "" {
+					continue
+				}
+				backends := allNginxUpstreams[upstreamName]
 				desiredUp, exists := desiredUpstreams[upstreamName]
 				if !exists || len(desiredUp.Backends) == 0 {
 					for _, backend := range backends {
-						path := fmt.Sprintf("%s?upstream=%s&server=%s:%d",
+						serverAddr := formatServerAddr(backend.IP, backend.Port)
+						path := fmt.Sprintf("%s?upstream=%s&server=%s",
 							strings.TrimPrefix(a.config.RemoveAPI, "/"),
 							url.QueryEscape(upstreamName),
-							url.QueryEscape(backend.IP),
-							backend.Port)
+							url.QueryEscape(serverAddr))
+
+						a.logger.Debug("Removing orphaned backend from NGINX",
+							logging.Field{Key: "client", Value: c.baseURL},
+							logging.Field{Key: "upstream", Value: upstreamName},
+							logging.Field{Key: "backend", Value: serverAddr})
 
 						if _, err := c.doRequest(ctx, "GET", path); err != nil {
-							a.logger.Error("Failed to remove orphaned backend", logging.Field{Key: "error", Value: err})
+							a.logger.Error("Failed to remove orphaned backend from NGINX",
+								logging.Field{Key: "client", Value: c.baseURL},
+								logging.Field{Key: "upstream", Value: upstreamName},
+								logging.Field{Key: "backend", Value: serverAddr},
+								logging.Field{Key: "error", Value: err})
 							mu.Lock()
-							errors = multierror.Append(errors, fmt.Errorf("client %s remove orphaned backend failed: %w", c.baseURL, err))
+							errors = multierror.Append(errors, fmt.Errorf("client %s remove orphaned backend %s from %s failed: %w", c.baseURL, serverAddr, upstreamName, err))
 							mu.Unlock()
 						} else {
 							changed = true
+							a.logger.Info("Successfully removed orphaned backend from NGINX",
+								logging.Field{Key: "client", Value: c.baseURL},
+								logging.Field{Key: "upstream", Value: upstreamName},
+								logging.Field{Key: "backend", Value: serverAddr})
 						}
 					}
 				}
@@ -257,41 +335,90 @@ func (a *NginxAdapter) SyncAllUpstreams(ctx context.Context, desiredUpstreams ma
 }
 
 // پارس کردن خروجی متنی Bulk NGINX و نگاشت آن به ساختار Map
+// پشتیبانی از فرمت Multi-Upstream و Single-Upstream Flat، آدرس‌های IPv4 و IPv6، و پارامترهای اختیاری وزن
 func parseBulkNginxBackends(response string) map[string][]model.Backend {
 	result := make(map[string][]model.Backend)
 	lines := strings.Split(response, "\n")
 	var currentUpstream string
 
-	reServer := regexp.MustCompile(`server\s+([0-9a-fA-F.:\[\]]+):(\d+)(?:\s+weight=(\d+))?`)
-
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, "//") {
 			continue
 		}
 
 		if strings.HasPrefix(line, "server ") {
-			if currentUpstream == "" {
+			line = strings.TrimPrefix(line, "server ")
+			line = strings.TrimSpace(line)
+			line = strings.TrimSuffix(line, ";")
+
+			fields := strings.Fields(line)
+			if len(fields) == 0 {
 				continue
 			}
-			matches := reServer.FindStringSubmatch(line)
-			if len(matches) >= 3 {
-				ip := matches[1]
-				port, _ := strconv.Atoi(matches[2])
-				weight := 1
-				if len(matches) >= 4 && matches[3] != "" {
-					weight, _ = strconv.Atoi(matches[3])
-				}
-				result[currentUpstream] = append(result[currentUpstream], model.Backend{
-					IP:     ip,
-					Port:   int32(port),
-					Weight: weight,
-				})
+
+			hostPort := fields[0]
+			host, portStr, err := net.SplitHostPort(hostPort)
+			if err != nil {
+				continue
 			}
+			port, err := strconv.Atoi(portStr)
+			if err != nil {
+				continue
+			}
+
+			weight := 1
+			for _, f := range fields[1:] {
+				if strings.HasPrefix(f, "weight=") {
+					if w, err := strconv.Atoi(strings.TrimPrefix(f, "weight=")); err == nil && w > 0 {
+						weight = w
+					}
+					break
+				}
+			}
+
+			// Preserve bracket format for IPv6 if originally bracketed
+			ip := host
+			if strings.Contains(ip, ":") && strings.HasPrefix(hostPort, "[") {
+				ip = fmt.Sprintf("[%s]", host)
+			}
+
+			backend := model.Backend{
+				IP:     ip,
+				Port:   int32(port),
+				Weight: weight,
+			}
+
+			result[currentUpstream] = append(result[currentUpstream], backend)
 		} else {
-			// تشخیص نام آپ‌استریم جدید
-			currentUpstream = strings.TrimSuffix(line, ":")
+			// Detection of new upstream name header, e.g. "upstream_name:" or "upstream upstream_name {"
+			trimmed := strings.TrimSuffix(line, ":")
+			trimmed = strings.TrimPrefix(trimmed, "upstream ")
+			trimmed = strings.TrimSuffix(trimmed, "{")
+			currentUpstream = strings.TrimSpace(trimmed)
 		}
 	}
 	return result
+}
+
+// Helper functions for address formatting and comparison
+
+func cleanIP(ip string) string {
+	return strings.Trim(strings.TrimSpace(ip), "[]")
+}
+
+func sameBackend(b1, b2 model.Backend) bool {
+	return cleanIP(b1.IP) == cleanIP(b2.IP) && b1.Port == b2.Port
+}
+
+func backendKey(b model.Backend) string {
+	return fmt.Sprintf("%s:%d", cleanIP(b.IP), b.Port)
+}
+
+func formatServerAddr(ip string, port int32) string {
+	cIP := cleanIP(ip)
+	if strings.Contains(cIP, ":") {
+		return fmt.Sprintf("[%s]:%d", cIP, port)
+	}
+	return fmt.Sprintf("%s:%d", cIP, port)
 }
