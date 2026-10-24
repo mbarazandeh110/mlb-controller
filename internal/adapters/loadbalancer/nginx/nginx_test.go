@@ -163,6 +163,10 @@ func TestSyncUpstream(t *testing.T) {
 	})
 
 	t.Run("SyncUpstream_EmptyBackendsDrainsAll", func(t *testing.T) {
+		mu.Lock()
+		requests = nil
+		mu.Unlock()
+
 		ctx := context.Background()
 		upstream := model.Upstream{
 			Name:     "test-upstream",
@@ -171,6 +175,167 @@ func TestSyncUpstream(t *testing.T) {
 
 		err := adapter.SyncUpstream(ctx, upstream)
 		assert.NoError(t, err)
+
+		mu.Lock()
+		reqs := append([]string(nil), requests...)
+		mu.Unlock()
+
+		var foundRemove bool
+		for _, req := range reqs {
+			if strings.Contains(req, "upstream_remove") && strings.Contains(req, "192.168.1.1") && strings.Contains(req, "8080") {
+				foundRemove = true
+				break
+			}
+		}
+		assert.True(t, foundRemove, "Expected upstream_remove to be called when draining backends")
+	})
+
+	t.Run("SyncUpstream_TTLCacheHit_Vs_MutationInvalidation", func(t *testing.T) {
+		var listCalls int
+		var cacheMu sync.Mutex
+
+		cacheServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			cacheMu.Lock()
+			if strings.Contains(r.URL.Path, "upstream_list") {
+				listCalls++
+				fmt.Fprint(w, "cache-upstream:\nserver 10.10.10.1:8080 weight=2;\n")
+				cacheMu.Unlock()
+				return
+			}
+			cacheMu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer cacheServer.Close()
+
+		uCache, _ := url.Parse(cacheServer.URL)
+		pCache, _ := strconv.Atoi(uCache.Port())
+
+		cacheCfg := config.NginxConfig{
+			Type:            "nginx",
+			Name:            "cache-nginx",
+			Addresses:       []config.AddressConfig{{IP: uCache.Hostname(), Port: pCache}},
+			Protocol:        "http",
+			Hostname:        "localhost",
+			ListAPI:         "/upstream_list",
+			AddAPI:          "/upstream_add",
+			RemoveAPI:       "/upstream_remove",
+			RequestPoolSize: 2,
+			RequestTimeout:  5 * time.Second,
+		}
+
+		cAdapter, err := NewNginxAdapter(cacheCfg, &fakeLogger{})
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		up := model.Upstream{
+			Name: "cache-upstream",
+			Backends: []model.Backend{
+				{IP: "10.10.10.1", Port: 8080, Weight: 2}, // exact match, no mutation
+			},
+		}
+
+		// 1. First sync calls list_api
+		err = cAdapter.SyncUpstream(ctx, up)
+		require.NoError(t, err)
+		cacheMu.Lock()
+		assert.Equal(t, 1, listCalls)
+		cacheMu.Unlock()
+
+		// 2. Second sync immediately with no changes hits the 2-second cache (no list_api call)
+		err = cAdapter.SyncUpstream(ctx, up)
+		require.NoError(t, err)
+		cacheMu.Lock()
+		assert.Equal(t, 1, listCalls, "Expected cache hit; list_api should not be called again")
+		cacheMu.Unlock()
+
+		// 3. Third sync with mutation (change weight) invalidates cache
+		upMutated := model.Upstream{
+			Name: "cache-upstream",
+			Backends: []model.Backend{
+				{IP: "10.10.10.1", Port: 8080, Weight: 5},
+			},
+		}
+		err = cAdapter.SyncUpstream(ctx, upMutated)
+		require.NoError(t, err)
+
+		// 4. Fourth sync must now re-query list_api because cache was invalidated
+		err = cAdapter.SyncUpstream(ctx, upMutated)
+		require.NoError(t, err)
+		cacheMu.Lock()
+		assert.Equal(t, 2, listCalls, "Expected cache miss after mutation invalidation")
+		cacheMu.Unlock()
+	})
+
+	t.Run("SyncUpstream_SemaphoreConcurrencyLimiting", func(t *testing.T) {
+		var activeRequests int32
+		var maxObservedActive int32
+		var semMu sync.Mutex
+
+		semServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			semMu.Lock()
+			activeRequests++
+			if activeRequests > maxObservedActive {
+				maxObservedActive = activeRequests
+			}
+			semMu.Unlock()
+
+			// Artificially hold connection briefly to test concurrent ceiling
+			time.Sleep(30 * time.Millisecond)
+
+			semMu.Lock()
+			activeRequests--
+			semMu.Unlock()
+
+			if strings.Contains(r.URL.Path, "upstream_list") {
+				fmt.Fprint(w, "sem-upstream:\nserver 10.0.0.1:8080 weight=1;\n")
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer semServer.Close()
+
+		uSem, _ := url.Parse(semServer.URL)
+		pSem, _ := strconv.Atoi(uSem.Port())
+
+		poolLimit := 2
+		semCfg := config.NginxConfig{
+			Type:            "nginx",
+			Name:            "sem-nginx",
+			Addresses:       []config.AddressConfig{{IP: uSem.Hostname(), Port: pSem}},
+			Protocol:        "http",
+			Hostname:        "localhost",
+			ListAPI:         "/upstream_list",
+			AddAPI:          "/upstream_add",
+			RemoveAPI:       "/upstream_remove",
+			RequestPoolSize: poolLimit,
+			RequestTimeout:  5 * time.Second,
+		}
+
+		semAdapter, err := NewNginxAdapter(semCfg, &fakeLogger{})
+		require.NoError(t, err)
+
+		var wg sync.WaitGroup
+		ctx := context.Background()
+
+		for i := 0; i < 6; i++ {
+			wg.Add(1)
+			go func(idx int) {
+				defer wg.Done()
+				_ = semAdapter.SyncUpstream(ctx, model.Upstream{
+					Name: "sem-upstream",
+					Backends: []model.Backend{
+						{IP: "10.0.0.1", Port: 8080, Weight: idx + 1},
+					},
+				})
+			}(i)
+		}
+
+		wg.Wait()
+
+		semMu.Lock()
+		assert.True(t, maxObservedActive <= int32(poolLimit),
+			"Max active concurrent requests (%d) exceeded pool limit (%d)", maxObservedActive, poolLimit)
+		semMu.Unlock()
 	})
 
 	t.Run("SyncUpstream_FlatFormatFallback", func(t *testing.T) {
@@ -349,6 +514,29 @@ server [fe80::1]:8082 weight=3;
 	t.Run("EmptyResponse", func(t *testing.T) {
 		parsed := parseBulkNginxBackends("")
 		assert.Empty(t, parsed)
+	})
+
+	t.Run("MalformedLines_SafelyIgnored", func(t *testing.T) {
+		response := `
+upstream_bad:
+not a server line
+server ;
+server invalid_port:abc;
+server 192.168.1.100:9000 weight=invalid;
+server 192.168.1.101:9001 weight=10;
+`
+		parsed := parseBulkNginxBackends(response)
+		require.Len(t, parsed, 1)
+		require.Len(t, parsed["upstream_bad"], 2)
+		// 192.168.1.100:9000 with invalid weight should default to 1
+		assert.Equal(t, "192.168.1.100", parsed["upstream_bad"][0].IP)
+		assert.Equal(t, int32(9000), parsed["upstream_bad"][0].Port)
+		assert.Equal(t, 1, parsed["upstream_bad"][0].Weight)
+
+		// 192.168.1.101:9001 with weight=10
+		assert.Equal(t, "192.168.1.101", parsed["upstream_bad"][1].IP)
+		assert.Equal(t, int32(9001), parsed["upstream_bad"][1].Port)
+		assert.Equal(t, 10, parsed["upstream_bad"][1].Weight)
 	})
 }
 

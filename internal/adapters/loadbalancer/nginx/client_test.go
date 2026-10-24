@@ -151,97 +151,202 @@ func TestNewNginxClientSet(t *testing.T) {
 	})
 }
 
-// TestDoRequest tests the doRequest method of NginxClient.
+// TestDoRequest tests the doRequest method of NginxClient with retries and status codes.
 func TestDoRequest(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "localhost", r.Host)
-		fmt.Fprint(w, "OK")
-	}))
-	defer server.Close()
-
-	// Parse server.URL to extract host and port
-	u, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("Failed to parse server URL: %v", err)
-	}
-	host := u.Hostname()
-	port, err := strconv.Atoi(u.Port())
-	if err != nil {
-		t.Fatalf("Failed to parse server port: %v", err)
-	}
-
-	cfg := config.NginxConfig{
-		Type:           "nginx",
-		Addresses:      []config.AddressConfig{{IP: host, Port: port}},
-		Protocol:       "http",
-		Hostname:       "localhost",
-		RequestTimeout: 5 * time.Second,
-	}
-	clients, err := NewNginxClientSet(cfg)
-	assert.NoError(t, err)
-	client := clients[0]
-
 	t.Run("SuccessfulRequest", func(t *testing.T) {
-		ctx := context.Background()
-		body, err := client.doRequest(ctx, "GET", "/test")
+		var attempts int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			assert.Equal(t, "localhost", r.Host)
+			fmt.Fprint(w, "OK")
+		}))
+		defer server.Close()
+
+		u, err := url.Parse(server.URL)
+		require.NoError(t, err)
+		port, err := strconv.Atoi(u.Port())
+		require.NoError(t, err)
+
+		cfg := config.NginxConfig{
+			Type:           "nginx",
+			Addresses:      []config.AddressConfig{{IP: u.Hostname(), Port: port}},
+			Protocol:       "http",
+			Hostname:       "localhost",
+			RequestTimeout: 5 * time.Second,
+		}
+		clients, err := NewNginxClientSet(cfg)
+		require.NoError(t, err)
+
+		body, err := clients[0].doRequest(context.Background(), "GET", "/test")
 		assert.NoError(t, err)
 		assert.Equal(t, "OK", string(body))
+		assert.Equal(t, 1, attempts)
 	})
 
-	t.Run("ServerError", func(t *testing.T) {
-		failServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	t.Run("ClientError_400_ImmediateFailureNoRetry", func(t *testing.T) {
+		var attempts int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			http.Error(w, "bad request parameter", http.StatusBadRequest)
 		}))
-		defer failServer.Close()
+		defer server.Close()
 
-		// Parse failServer.URL
-		u, err := url.Parse(failServer.URL)
-		if err != nil {
-			t.Fatalf("Failed to parse fail server URL: %v", err)
-		}
-		host := u.Hostname()
-		port, err := strconv.Atoi(u.Port())
-		if err != nil {
-			t.Fatalf("Failed to parse fail server port: %v", err)
-		}
+		u, _ := url.Parse(server.URL)
+		port, _ := strconv.Atoi(u.Port())
 
-		cfg.Addresses = []config.AddressConfig{{IP: host, Port: port}}
+		cfg := config.NginxConfig{
+			Type:           "nginx",
+			Addresses:      []config.AddressConfig{{IP: u.Hostname(), Port: port}},
+			Protocol:       "http",
+			Hostname:       "localhost",
+			RequestTimeout: 5 * time.Second,
+		}
 		clients, err := NewNginxClientSet(cfg)
-		assert.NoError(t, err)
-		client := clients[0]
+		require.NoError(t, err)
 
-		ctx := context.Background()
-		_, err = client.doRequest(ctx, "GET", "/test")
+		_, err = clients[0].doRequest(context.Background(), "GET", "/test")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "request failed with status 400")
+		assert.Equal(t, 1, attempts, "HTTP 400 must fail immediately without retry")
+	})
+
+	t.Run("ClientError_404_ImmediateFailureNoRetry", func(t *testing.T) {
+		var attempts int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			http.NotFound(w, r)
+		}))
+		defer server.Close()
+
+		u, _ := url.Parse(server.URL)
+		port, _ := strconv.Atoi(u.Port())
+
+		cfg := config.NginxConfig{
+			Type:           "nginx",
+			Addresses:      []config.AddressConfig{{IP: u.Hostname(), Port: port}},
+			Protocol:       "http",
+			Hostname:       "localhost",
+			RequestTimeout: 5 * time.Second,
+		}
+		clients, err := NewNginxClientSet(cfg)
+		require.NoError(t, err)
+
+		_, err = clients[0].doRequest(context.Background(), "GET", "/test")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "request failed with status 404")
+		assert.Equal(t, 1, attempts, "HTTP 404 must fail immediately without retry")
+	})
+
+	t.Run("ServerError_500_RetriesMaxAttemptsAndFails", func(t *testing.T) {
+		var attempts int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+		}))
+		defer server.Close()
+
+		u, _ := url.Parse(server.URL)
+		port, _ := strconv.Atoi(u.Port())
+
+		cfg := config.NginxConfig{
+			Type:           "nginx",
+			Addresses:      []config.AddressConfig{{IP: u.Hostname(), Port: port}},
+			Protocol:       "http",
+			Hostname:       "localhost",
+			RequestTimeout: 5 * time.Second,
+		}
+		clients, err := NewNginxClientSet(cfg)
+		require.NoError(t, err)
+
+		_, err = clients[0].doRequest(context.Background(), "GET", "/test")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "request failed with status 500")
+		assert.Equal(t, 3, attempts, "HTTP 500 must retry up to 3 times")
+	})
+
+	t.Run("RateLimited_429_RetriesAndRecovers", func(t *testing.T) {
+		var attempts int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			if attempts == 1 {
+				http.Error(w, "too many requests", http.StatusTooManyRequests)
+				return
+			}
+			fmt.Fprint(w, "OK after 429")
+		}))
+		defer server.Close()
+
+		u, _ := url.Parse(server.URL)
+		port, _ := strconv.Atoi(u.Port())
+
+		cfg := config.NginxConfig{
+			Type:           "nginx",
+			Addresses:      []config.AddressConfig{{IP: u.Hostname(), Port: port}},
+			Protocol:       "http",
+			Hostname:       "localhost",
+			RequestTimeout: 5 * time.Second,
+		}
+		clients, err := NewNginxClientSet(cfg)
+		require.NoError(t, err)
+
+		body, err := clients[0].doRequest(context.Background(), "GET", "/test")
+		assert.NoError(t, err)
+		assert.Equal(t, "OK after 429", string(body))
+		assert.Equal(t, 2, attempts, "HTTP 429 must be retried")
+	})
+
+	t.Run("ServerError_500_TransientRecovery", func(t *testing.T) {
+		var attempts int
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			attempts++
+			if attempts == 1 {
+				http.Error(w, "temporary error", http.StatusInternalServerError)
+				return
+			}
+			fmt.Fprint(w, "recovered")
+		}))
+		defer server.Close()
+
+		u, _ := url.Parse(server.URL)
+		port, _ := strconv.Atoi(u.Port())
+
+		cfg := config.NginxConfig{
+			Type:           "nginx",
+			Addresses:      []config.AddressConfig{{IP: u.Hostname(), Port: port}},
+			Protocol:       "http",
+			Hostname:       "localhost",
+			RequestTimeout: 5 * time.Second,
+		}
+		clients, err := NewNginxClientSet(cfg)
+		require.NoError(t, err)
+
+		body, err := clients[0].doRequest(context.Background(), "GET", "/test")
+		assert.NoError(t, err)
+		assert.Equal(t, "recovered", string(body))
+		assert.Equal(t, 2, attempts)
 	})
 
 	t.Run("ContextTimeout", func(t *testing.T) {
-		timeoutServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			time.Sleep(100 * time.Millisecond)
 			fmt.Fprint(w, "OK")
 		}))
-		defer timeoutServer.Close()
+		defer server.Close()
 
-		// Parse timeoutServer.URL
-		u, err := url.Parse(timeoutServer.URL)
-		if err != nil {
-			t.Fatalf("Failed to parse timeout server URL: %v", err)
-		}
-		host := u.Hostname()
-		port, err := strconv.Atoi(u.Port())
-		if err != nil {
-			t.Fatalf("Failed to parse timeout server port: %v", err)
-		}
+		u, _ := url.Parse(server.URL)
+		port, _ := strconv.Atoi(u.Port())
 
-		cfg.Addresses = []config.AddressConfig{{IP: host, Port: port}}
-		cfg.RequestTimeout = 10 * time.Millisecond
+		cfg := config.NginxConfig{
+			Type:           "nginx",
+			Addresses:      []config.AddressConfig{{IP: u.Hostname(), Port: port}},
+			Protocol:       "http",
+			Hostname:       "localhost",
+			RequestTimeout: 10 * time.Millisecond,
+		}
 		clients, err := NewNginxClientSet(cfg)
-		assert.NoError(t, err)
-		client := clients[0]
+		require.NoError(t, err)
 
-		ctx := context.Background()
-		_, err = client.doRequest(ctx, "GET", "/test")
+		_, err = clients[0].doRequest(context.Background(), "GET", "/test")
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "context deadline exceeded")
 	})

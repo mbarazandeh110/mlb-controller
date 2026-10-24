@@ -14,28 +14,57 @@ import (
 	metrics_ports "mlb-controller/internal/ports/metrics"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeMetrics implements metrics_ports.Metrics for testing.
 type fakeMetrics struct {
+	mu       sync.RWMutex
 	started  bool
 	stopped  bool
+	proxied  bool
 	startErr error
 	stopErr  error
+	proxyErr error
 }
 
 func (f *fakeMetrics) Start() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.started = true
 	return f.startErr
 }
 
 func (f *fakeMetrics) Stop(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.stopped = true
 	return f.stopErr
 }
 
 func (f *fakeMetrics) ProxyToLeader(ctx context.Context) error {
-	return nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.proxied = true
+	return f.proxyErr
+}
+
+func (f *fakeMetrics) IsStarted() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.started
+}
+
+func (f *fakeMetrics) IsStopped() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.stopped
+}
+
+func (f *fakeMetrics) IsProxied() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.proxied
 }
 
 func (f *fakeMetrics) NewCounter(name, help string, labels []string) metrics_ports.Counter {
@@ -51,31 +80,57 @@ func (f *fakeMetrics) ObserveSyncDuration(upstream string, duration float64) {}
 
 // fakeLeaderElection implements leaderelection_ports.LeaderElectionPort for testing.
 type fakeLeaderElection struct {
+	mu        sync.RWMutex
 	callbacks leaderelection_ports.Callbacks
 	runErr    error
+	leader    bool
+}
+
+func newFakeLeaderElection(isLeader bool) *fakeLeaderElection {
+	return &fakeLeaderElection{
+		leader: isLeader,
+	}
 }
 
 func (f *fakeLeaderElection) SetCallbacks(callbacks leaderelection_ports.Callbacks) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.callbacks = callbacks
 }
 
 func (f *fakeLeaderElection) Run(ctx context.Context) error {
-	if f.callbacks.OnStartedLeading != nil {
-		f.callbacks.OnStartedLeading(ctx)
+	f.mu.RLock()
+	cb := f.callbacks
+	runErr := f.runErr
+	f.mu.RUnlock()
+
+	if cb.OnStartedLeading != nil {
+		cb.OnStartedLeading(ctx)
 	}
 	<-ctx.Done()
-	if f.callbacks.OnStoppedLeading != nil {
-		f.callbacks.OnStoppedLeading()
+	if cb.OnStoppedLeading != nil {
+		cb.OnStoppedLeading()
 	}
-	return f.runErr
+	return runErr
 }
 
-func (f *fakeLeaderElection) IsLeader() bool { return true }
+func (f *fakeLeaderElection) IsLeader() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.leader
+}
+
+func (f *fakeLeaderElection) SetLeader(val bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.leader = val
+}
 
 func (f *fakeLeaderElection) GetLeaderAddr() string { return "127.0.0.1:9090" }
 
 // fakeController implements controller.Controller for testing.
 type fakeController struct {
+	mu            sync.RWMutex
 	started       bool
 	syncUpstreams bool
 	startErr      error
@@ -83,14 +138,32 @@ type fakeController struct {
 }
 
 func (f *fakeController) Start(ctx context.Context) error {
+	f.mu.Lock()
 	f.started = true
+	startErr := f.startErr
+	f.mu.Unlock()
+
 	<-ctx.Done()
-	return f.startErr
+	return startErr
 }
 
 func (f *fakeController) SyncUpstreams(ctx context.Context) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.syncUpstreams = true
 	return f.syncErr
+}
+
+func (f *fakeController) IsStarted() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.started
+}
+
+func (f *fakeController) HasSyncedUpstreams() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.syncUpstreams
 }
 
 func (f *fakeController) GetState() model.ControllerState {
@@ -123,11 +196,31 @@ func (f *fakeLogger) Messages() []string {
 	return append([]string(nil), f.messages...)
 }
 
+func (f *fakeLogger) HasMessage(substring string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, m := range f.messages {
+		if m == substring || (len(substring) > 0 && len(m) >= len(substring) && contains(m, substring)) {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
 func TestNewApp(t *testing.T) {
 	logger := &fakeLogger{}
 	cfg := &domain.Config{}
 	metrics := &fakeMetrics{}
-	leaderElection := &fakeLeaderElection{}
+	leaderElection := newFakeLeaderElection(true)
 	ctrl := &fakeController{}
 
 	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
@@ -144,7 +237,7 @@ func TestAppStart_Success(t *testing.T) {
 	logger := &fakeLogger{}
 	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true, Port: 9090, URI: "/metrics"}}
 	metrics := &fakeMetrics{}
-	leaderElection := &fakeLeaderElection{}
+	leaderElection := newFakeLeaderElection(true)
 	ctrl := &fakeController{}
 
 	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
@@ -154,17 +247,17 @@ func TestAppStart_Success(t *testing.T) {
 	err := app.Start(ctx)
 
 	assert.NoError(t, err)
-	assert.True(t, metrics.started)
-	assert.Contains(t, logger.Messages(), "Starting application...")
-	assert.Contains(t, logger.Messages(), "Metrics server started")
-	assert.Contains(t, logger.Messages(), "Context canceled, stopping application")
+	assert.True(t, metrics.IsStarted())
+	assert.True(t, logger.HasMessage("Starting application..."))
+	assert.True(t, logger.HasMessage("Metrics server started"))
+	assert.True(t, logger.HasMessage("Context canceled, stopping application"))
 }
 
 func TestAppStart_MetricsStartError(t *testing.T) {
 	logger := &fakeLogger{}
 	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true, Port: 9090, URI: "/metrics"}}
 	metrics := &fakeMetrics{startErr: errors.New("metrics start failed")}
-	leaderElection := &fakeLeaderElection{}
+	leaderElection := newFakeLeaderElection(true)
 	ctrl := &fakeController{}
 
 	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
@@ -174,15 +267,15 @@ func TestAppStart_MetricsStartError(t *testing.T) {
 	err := app.Start(ctx)
 
 	assert.Error(t, err)
-	assert.Contains(t, logger.Messages(), "Failed to start metrics server")
-	assert.True(t, metrics.started)
+	assert.True(t, logger.HasMessage("Failed to start metrics server"))
+	assert.True(t, metrics.IsStarted())
 }
 
 func TestAppStop_Success(t *testing.T) {
 	logger := &fakeLogger{}
 	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true}}
 	metrics := &fakeMetrics{}
-	leaderElection := &fakeLeaderElection{}
+	leaderElection := newFakeLeaderElection(true)
 	ctrl := &fakeController{}
 	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
 
@@ -190,14 +283,14 @@ func TestAppStop_Success(t *testing.T) {
 	err := app.Stop(ctx)
 
 	assert.NoError(t, err)
-	assert.True(t, metrics.stopped)
+	assert.True(t, metrics.IsStopped())
 }
 
 func TestAppStop_MetricsStopError(t *testing.T) {
 	logger := &fakeLogger{}
 	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true}}
 	metrics := &fakeMetrics{stopErr: errors.New("metrics stop failed")}
-	leaderElection := &fakeLeaderElection{}
+	leaderElection := newFakeLeaderElection(true)
 	ctrl := &fakeController{}
 	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
 
@@ -205,6 +298,128 @@ func TestAppStop_MetricsStopError(t *testing.T) {
 	err := app.Stop(ctx)
 
 	assert.Error(t, err)
-	assert.True(t, metrics.stopped)
-	assert.Contains(t, logger.Messages(), "Failed to stop metrics server")
+	assert.True(t, metrics.IsStopped())
+	assert.True(t, logger.HasMessage("Failed to stop metrics server"))
+}
+
+func TestApp_LeaderElection_Callbacks_OnStartedAndStoppedLeading(t *testing.T) {
+	logger := &fakeLogger{}
+	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: false}}
+	metrics := &fakeMetrics{}
+	leaderElection := newFakeLeaderElection(true)
+	ctrl := &fakeController{}
+
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	runDone := make(chan struct{})
+	go func() {
+		_ = app.Start(ctx)
+		close(runDone)
+	}()
+
+	require.Eventually(t, func() bool {
+		return ctrl.IsStarted() && ctrl.HasSyncedUpstreams()
+	}, 2*time.Second, 10*time.Millisecond)
+
+	assert.True(t, logger.HasMessage("Started leading, initializing controller"))
+
+	// Stop app to trigger OnStoppedLeading
+	cancel()
+	<-runDone
+
+	require.Eventually(t, func() bool {
+		return logger.HasMessage("Stopped leading, shutting down controller")
+	}, 1*time.Second, 10*time.Millisecond)
+}
+
+func TestApp_LeaderElection_ControllerStartError(t *testing.T) {
+	logger := &fakeLogger{}
+	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: false}}
+	metrics := &fakeMetrics{}
+	leaderElection := newFakeLeaderElection(true)
+	ctrl := &fakeController{startErr: errors.New("start failed")}
+
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = app.Start(ctx)
+
+	require.Eventually(t, func() bool {
+		return logger.HasMessage("Controller failed")
+	}, 1*time.Second, 10*time.Millisecond)
+}
+
+func TestApp_LeaderElection_SyncUpstreamsError(t *testing.T) {
+	logger := &fakeLogger{}
+	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: false}}
+	metrics := &fakeMetrics{}
+	leaderElection := newFakeLeaderElection(true)
+	ctrl := &fakeController{syncErr: errors.New("sync failed")}
+
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = app.Start(ctx)
+
+	require.Eventually(t, func() bool {
+		return logger.HasMessage("Initial upstream sync failed")
+	}, 1*time.Second, 10*time.Millisecond)
+}
+
+func TestApp_LeaderElection_RunError(t *testing.T) {
+	logger := &fakeLogger{}
+	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: false}}
+	metrics := &fakeMetrics{}
+	leaderElection := newFakeLeaderElection(true)
+	leaderElection.runErr = errors.New("election failure")
+	ctrl := &fakeController{}
+
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = app.Start(ctx)
+
+	require.Eventually(t, func() bool {
+		return logger.HasMessage("Leader election failed")
+	}, 1*time.Second, 10*time.Millisecond)
+}
+
+func TestApp_NonLeader_ProxyMetrics(t *testing.T) {
+	logger := &fakeLogger{}
+	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true, Port: 9090, URI: "/metrics"}}
+	metrics := &fakeMetrics{}
+	leaderElection := newFakeLeaderElection(false) // non-leader
+	ctrl := &fakeController{}
+
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = app.Start(ctx)
+
+	require.Eventually(t, func() bool {
+		return metrics.IsProxied() && logger.HasMessage("Non-leader instance, proxying metrics")
+	}, 1*time.Second, 10*time.Millisecond)
+}
+
+func TestApp_NonLeader_ProxyMetricsError(t *testing.T) {
+	logger := &fakeLogger{}
+	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true, Port: 9090, URI: "/metrics"}}
+	metrics := &fakeMetrics{proxyErr: errors.New("proxy error")}
+	leaderElection := newFakeLeaderElection(false) // non-leader
+	ctrl := &fakeController{}
+
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_ = app.Start(ctx)
+
+	require.Eventually(t, func() bool {
+		return logger.HasMessage("Failed to proxy metrics to leader")
+	}, 1*time.Second, 10*time.Millisecond)
 }

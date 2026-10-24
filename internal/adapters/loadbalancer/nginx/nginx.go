@@ -390,7 +390,7 @@ func parseBulkNginxBackends(response string) map[string][]model.Backend {
 			}
 
 			result[currentUpstream] = append(result[currentUpstream], backend)
-		} else {
+		} else if strings.HasSuffix(line, ":") || strings.HasPrefix(line, "upstream ") || strings.HasSuffix(line, "{") {
 			// Detection of new upstream name header, e.g. "upstream_name:" or "upstream upstream_name {"
 			trimmed := strings.TrimSuffix(line, ":")
 			trimmed = strings.TrimPrefix(trimmed, "upstream ")

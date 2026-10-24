@@ -338,6 +338,9 @@ func (c *ControllerImpl) syncUpstreamsForService(ctx context.Context, svc model.
 
 // اجرای مستقیم Two-Way Reconciliation در بازه‌های زمانی ثابت
 func (c *ControllerImpl) runPeriodicSync(ctx context.Context) {
+	if c.syncTicker == nil {
+		c.syncTicker = time.NewTicker(c.config.GlobalUpstreamSyncPeriod)
+	}
 	for {
 		select {
 		case <-c.syncTicker.C:
