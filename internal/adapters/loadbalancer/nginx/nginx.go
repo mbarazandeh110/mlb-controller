@@ -162,7 +162,7 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 					url.QueryEscape(backend.IP),
 					backend.Port,
 					backend.Weight)
-				
+
 				if _, err := c.doRequest(ctx, "GET", path); err != nil {
 					mu.Lock()
 					errors = multierror.Append(errors, fmt.Errorf("client %s add failed: %w", c.baseURL, err))
@@ -177,7 +177,7 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 					url.QueryEscape(upstream.Name),
 					url.QueryEscape(backend.IP),
 					backend.Port)
-				
+
 				if _, err := c.doRequest(ctx, "GET", path); err != nil {
 					mu.Lock()
 					errors = multierror.Append(errors, fmt.Errorf("client %s remove failed: %w", c.baseURL, err))
@@ -206,6 +206,15 @@ func (a *NginxAdapter) SyncAllUpstreams(ctx context.Context, desiredUpstreams ma
 		wg.Add(1)
 		go func(c *NginxClient) {
 			defer wg.Done()
+
+			if err := a.semaphore.Acquire(ctx, 1); err != nil {
+				mu.Lock()
+				errors = multierror.Append(errors, fmt.Errorf("client %s semaphore error: %w", c.baseURL, err))
+				mu.Unlock()
+				return
+			}
+			defer a.semaphore.Release(1)
+
 			allNginxUpstreams, err := a.refreshCache(ctx, c)
 			if err != nil {
 				mu.Lock()
@@ -214,22 +223,31 @@ func (a *NginxAdapter) SyncAllUpstreams(ctx context.Context, desiredUpstreams ma
 				return
 			}
 
-			// یافتن آپ‌استریم‌های یتیم (Orphaned) که در NGINX هستند اما در K8s وجود ندارند
+			// یافتن آپ‌استریم‌های یتیم (Orphaned) که در NGINX هستند اما در K8s وجود ندارند یا بدون Backend هستند
+			changed := false
 			for upstreamName, backends := range allNginxUpstreams {
-				if _, exists := desiredUpstreams[upstreamName]; !exists {
+				desiredUp, exists := desiredUpstreams[upstreamName]
+				if !exists || len(desiredUp.Backends) == 0 {
 					for _, backend := range backends {
 						path := fmt.Sprintf("%s?upstream=%s&server=%s:%d",
 							strings.TrimPrefix(a.config.RemoveAPI, "/"),
 							url.QueryEscape(upstreamName),
 							url.QueryEscape(backend.IP),
 							backend.Port)
-						
+
 						if _, err := c.doRequest(ctx, "GET", path); err != nil {
 							a.logger.Error("Failed to remove orphaned backend", logging.Field{Key: "error", Value: err})
+							mu.Lock()
+							errors = multierror.Append(errors, fmt.Errorf("client %s remove orphaned backend failed: %w", c.baseURL, err))
+							mu.Unlock()
+						} else {
+							changed = true
 						}
 					}
-					a.invalidateCache(c.baseURL)
 				}
+			}
+			if changed {
+				a.invalidateCache(c.baseURL)
 			}
 		}(client)
 	}
@@ -272,7 +290,7 @@ func parseBulkNginxBackends(response string) map[string][]model.Backend {
 			}
 		} else {
 			// تشخیص نام آپ‌استریم جدید
-			currentUpstream = strings.TrimSuffix(line, ":") 
+			currentUpstream = strings.TrimSuffix(line, ":")
 		}
 	}
 	return result

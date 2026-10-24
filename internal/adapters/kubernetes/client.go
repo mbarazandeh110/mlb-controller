@@ -72,25 +72,40 @@ func (k *KubernetesAdapter) WatchServices(ctx context.Context, requiredLabels ma
 			svc, ok := obj.(*corev1.Service)
 			if ok && k.isMLBService(svc) {
 				sendServiceEvent(events, kubernetes.ServiceEvent{
-					Type: kubernetes.EventTypeAdd,
+					Type:    kubernetes.EventTypeAdd,
 					Service: k.mapService(svc),
 				})
 			}
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
-			svc, ok := newObj.(*corev1.Service)
-			if ok && k.isMLBService(svc) {
+			oldSvc, okOld := oldObj.(*corev1.Service)
+			newSvc, okNew := newObj.(*corev1.Service)
+			if !okNew {
+				return
+			}
+			wasMLB := okOld && k.isMLBService(oldSvc)
+			isMLB := k.isMLBService(newSvc)
+
+			if wasMLB && !isMLB {
 				sendServiceEvent(events, kubernetes.ServiceEvent{
-					Type: kubernetes.EventTypeUpdate,
-					Service: k.mapService(svc),
+					Type:    kubernetes.EventTypeDelete,
+					Service: k.mapService(oldSvc),
+				})
+			} else if isMLB {
+				sendServiceEvent(events, kubernetes.ServiceEvent{
+					Type:    kubernetes.EventTypeUpdate,
+					Service: k.mapService(newSvc),
 				})
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
+			if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+				obj = tombstone.Obj
+			}
 			svc, ok := obj.(*corev1.Service)
 			if ok && k.isMLBService(svc) {
 				sendServiceEvent(events, kubernetes.ServiceEvent{
-					Type: kubernetes.EventTypeDelete,
+					Type:    kubernetes.EventTypeDelete,
 					Service: k.mapService(svc),
 				})
 			}
@@ -133,6 +148,9 @@ func (k *KubernetesAdapter) WatchPods(ctx context.Context, events chan<- kuberne
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
+			if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+				obj = tombstone.Obj
+			}
 			if pod, ok := obj.(*corev1.Pod); ok {
 				sendPodEvent(events, kubernetes.PodEvent{
 					Type: kubernetes.EventTypeDelete,
@@ -178,6 +196,9 @@ func (k *KubernetesAdapter) WatchNodes(ctx context.Context, events chan<- kubern
 			}
 		},
 		DeleteFunc: func(obj interface{}) {
+			if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+				obj = tombstone.Obj
+			}
 			if node, ok := obj.(*corev1.Node); ok {
 				sendNodeEvent(events, kubernetes.NodeEvent{
 					Type: kubernetes.EventTypeDelete,

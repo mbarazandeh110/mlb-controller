@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
+	"time"
 
 	domain "mlb-controller/internal/domain/config"
 	leaderelection_ports "mlb-controller/internal/ports/leaderelection"
@@ -22,6 +24,7 @@ type KubernetesLeaderElection struct {
 	logger    logging_ports.Logger
 	isLeader  bool
 	callbacks leaderelection_ports.Callbacks
+	mu        sync.RWMutex
 }
 
 func NewKubernetesLeaderElection(leaderCfg domain.LeaderElectionConfig, k8sCfg domain.KubernetesConfig, logger logging_ports.Logger) (*KubernetesLeaderElection, error) {
@@ -55,14 +58,23 @@ func NewKubernetesLeaderElection(leaderCfg domain.LeaderElectionConfig, k8sCfg d
 func (k *KubernetesLeaderElection) Run(ctx context.Context) error {
 	if !k.config.Enabled {
 		k.logger.Info("Leader election is disabled, running as leader")
+		k.mu.Lock()
 		k.isLeader = true
-		if k.callbacks.OnStartedLeading != nil {
-			k.callbacks.OnStartedLeading(ctx)
+		cbStart := k.callbacks.OnStartedLeading
+		k.mu.Unlock()
+
+		if cbStart != nil {
+			cbStart(ctx)
 		}
 		<-ctx.Done()
+
+		k.mu.Lock()
 		k.isLeader = false
-		if k.callbacks.OnStoppedLeading != nil {
-			k.callbacks.OnStoppedLeading()
+		cbStop := k.callbacks.OnStoppedLeading
+		k.mu.Unlock()
+
+		if cbStop != nil {
+			cbStop()
 		}
 		return nil
 	}
@@ -94,22 +106,30 @@ func (k *KubernetesLeaderElection) Run(ctx context.Context) error {
 		Callbacks: k8sleaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				k.logger.Info("Became leader", logging_ports.Field{Key: "id", Value: id})
+				k.mu.Lock()
 				k.isLeader = true
-				if k.callbacks.OnStartedLeading != nil {
-					k.callbacks.OnStartedLeading(ctx)
+				cb := k.callbacks.OnStartedLeading
+				k.mu.Unlock()
+
+				if cb != nil {
+					cb(ctx)
 				}
 			},
 			OnStoppedLeading: func() {
 				k.logger.Info("Stopped being leader", logging_ports.Field{Key: "id", Value: id})
+				k.mu.Lock()
 				k.isLeader = false
-				if k.callbacks.OnStoppedLeading != nil {
-					k.callbacks.OnStoppedLeading()
+				cb := k.callbacks.OnStoppedLeading
+				k.mu.Unlock()
+
+				if cb != nil {
+					cb()
 				}
 			},
 		},
 	}
 
-	// Start leader election
+	// Start leader elector
 	leaderElector, err := k8sleaderelection.NewLeaderElector(leConfig)
 	if err != nil {
 		return fmt.Errorf("failed to create leader elector: %w", err)
@@ -122,18 +142,21 @@ func (k *KubernetesLeaderElection) Run(ctx context.Context) error {
 
 // IsLeader returns true if the current instance is the leader.
 func (k *KubernetesLeaderElection) IsLeader() bool {
+	k.mu.RLock()
+	defer k.mu.RUnlock()
 	return k.isLeader
 }
 
 // SetCallbacks sets the callbacks for leader election events.
 func (k *KubernetesLeaderElection) SetCallbacks(callbacks leaderelection_ports.Callbacks) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
 	k.callbacks = callbacks
 }
 
 // GetLeaderAddr returns the address of the current leader by querying the Lease object.
 func (k *KubernetesLeaderElection) GetLeaderAddr() string {
 	if !k.config.Enabled {
-		// When leader election is disabled, use local metrics address
 		id, err := os.Hostname()
 		if err != nil {
 			k.logger.Error("Failed to get hostname for leader address", logging_ports.Field{Key: "error", Value: err})
@@ -142,8 +165,7 @@ func (k *KubernetesLeaderElection) GetLeaderAddr() string {
 		return id
 	}
 
-	if k.isLeader {
-		// If this instance is the leader, return its own address
+	if k.IsLeader() {
 		id, err := os.Hostname()
 		if err != nil {
 			k.logger.Error("Failed to get hostname for leader address", logging_ports.Field{Key: "error", Value: err})
@@ -152,8 +174,10 @@ func (k *KubernetesLeaderElection) GetLeaderAddr() string {
 		return id
 	}
 
-	// Query the Lease object to get the leader's identity
-	lease, err := k.client.CoordinationV1().Leases(k.config.LeaseNamespace).Get(context.Background(), k.config.LeaseName, metav1.GetOptions{})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	lease, err := k.client.CoordinationV1().Leases(k.config.LeaseNamespace).Get(ctx, k.config.LeaseName, metav1.GetOptions{})
 	if err != nil {
 		k.logger.Error("Failed to get lease for leader address", logging_ports.Field{Key: "error", Value: err})
 		return ""
@@ -164,6 +188,5 @@ func (k *KubernetesLeaderElection) GetLeaderAddr() string {
 		return ""
 	}
 
-	// Use holderIdentity (Pod name) as the leader address with MetricsPort
 	return *lease.Spec.HolderIdentity
 }

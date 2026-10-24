@@ -3,13 +3,9 @@ package application
 
 import (
 	"context"
-	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	domain "mlb-controller/internal/domain/config"
-	config_ports "mlb-controller/internal/ports/config"
 	"mlb-controller/internal/ports/controller"
 	"mlb-controller/internal/ports/leaderelection"
 	logging_ports "mlb-controller/internal/ports/logging"
@@ -21,43 +17,35 @@ import (
 // App is the main application struct that orchestrates the controller logic.
 type App struct {
 	logger         logging_ports.Logger
-	loader         config_ports.Loader
+	config         *domain.Config
 	metrics        metrics_ports.Metrics
 	leaderElection leaderelection.LeaderElectionPort
 	controller     controller.Controller
-	config         *domain.Config
 }
 
 // NewApp creates a new App instance.
 func NewApp(
 	logger logging_ports.Logger,
-	loader config_ports.Loader,
+	cfg *domain.Config,
 	metrics metrics_ports.Metrics,
 	leaderElection leaderelection.LeaderElectionPort,
 	ctrl controller.Controller,
 ) *App {
 	return &App{
 		logger:         logger,
-		loader:         loader,
+		config:         cfg,
 		metrics:        metrics,
 		leaderElection: leaderElection,
 		controller:     ctrl,
 	}
 }
 
-// Start runs the application, loading config, setting up leader election, and starting metrics server.
+// Start runs the application, setting up leader election, metrics server, and waiting for context cancellation.
 func (a *App) Start(ctx context.Context) error {
-	// Load configuration
-	cfg, err := a.loader.Load()
-	if err != nil {
-		a.logger.Error("Failed to load config", logging_ports.Field{Key: "error", Value: err})
-		return err
-	}
-	a.config = cfg
-	a.logger.Info("Configuration loaded successfully", logging_ports.Field{Key: "app", Value: "mlb-controller"})
+	a.logger.Info("Starting application...", logging_ports.Field{Key: "app", Value: "mlb-controller"})
 
 	// Start metrics server if enabled
-	if a.config.Metrics.Enabled {
+	if a.config != nil && a.config.Metrics.Enabled {
 		if err := a.metrics.Start(); err != nil {
 			a.logger.Error("Failed to start metrics server", logging_ports.Field{Key: "error", Value: err})
 			return err
@@ -102,7 +90,7 @@ func (a *App) Start(ctx context.Context) error {
 			case <-ctx.Done():
 				return
 			default:
-				if !a.leaderElection.IsLeader() && a.config.Metrics.Enabled {
+				if a.config != nil && !a.leaderElection.IsLeader() && a.config.Metrics.Enabled {
 					a.logger.Info("Non-leader instance, proxying metrics")
 					if err := a.metrics.ProxyToLeader(ctx); err != nil {
 						a.logger.Error("Failed to proxy metrics to leader",
@@ -117,18 +105,10 @@ func (a *App) Start(ctx context.Context) error {
 		}
 	}()
 
-	// Wait for shutdown signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case <-sigCh:
-		a.logger.Info("Received shutdown signal, stopping application")
-	case <-ctx.Done():
-		a.logger.Info("Context canceled, stopping application")
-	}
-
-	// Perform cleanup
-	return a.Stop(ctx)
+	// Block until context is cancelled (signal handled by main.go)
+	<-ctx.Done()
+	a.logger.Info("Context canceled, stopping application")
+	return nil
 }
 
 // Stop performs cleanup tasks (e.g., syncing logger and stopping metrics server).

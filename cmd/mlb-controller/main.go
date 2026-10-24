@@ -34,19 +34,19 @@ func main() {
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		
+
 		container.Logger.Info("Initiating graceful shutdown sequence...")
 		if stopErr := container.App.Stop(shutdownCtx); stopErr != nil {
 			container.Logger.Error("Failed to stop app gracefully", logging_ports.Field{Key: "error", Value: stopErr})
 		} else {
 			container.Logger.Info("Application stopped successfully")
 		}
-		
+
 		container.Logger.Sync()
 	}()
 
 	container.Logger.Info("Starting mlb-controller...")
-	
+
 	// پاس دادن Context کنترل‌شده با سیگنال به متد Start
 	// با دریافت SIGTERM از سمت Kubelet، این Context کنسل شده و روتین‌های داخلی متوقف می‌شوند
 	if err := container.App.Start(ctx); err != nil {

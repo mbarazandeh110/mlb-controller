@@ -10,7 +10,7 @@ import (
 type LoadBalancerAdapter interface {
 	// SyncUpstream ensures the upstream matches the desired state (idempotent).
 	SyncUpstream(ctx context.Context, upstream model.Upstream) error
-	
+
 	// SyncAllUpstreams performs two-way reconciliation to remove orphaned upstreams
 	// by comparing the desired state with the load balancer's actual state.
 	SyncAllUpstreams(ctx context.Context, desiredUpstreams map[string]model.Upstream) error

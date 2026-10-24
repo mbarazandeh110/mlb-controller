@@ -22,10 +22,12 @@ func (f *fakeLeaderElection) Run(ctx context.Context) error {
 	f.mu.Lock()
 	f.isLeader = true
 	f.onStartCalled = true
-	if f.callbacks.OnStartedLeading != nil {
-		go f.callbacks.OnStartedLeading(ctx) // Run in goroutine to avoid blocking
-	}
+	cbStart := f.callbacks.OnStartedLeading
 	f.mu.Unlock()
+
+	if cbStart != nil {
+		go cbStart(ctx)
+	}
 
 	// Simulate leadership until context is canceled
 	<-ctx.Done()
@@ -33,10 +35,12 @@ func (f *fakeLeaderElection) Run(ctx context.Context) error {
 	f.mu.Lock()
 	f.isLeader = false
 	f.onStopCalled = true
-	if f.callbacks.OnStoppedLeading != nil {
-		f.callbacks.OnStoppedLeading()
-	}
+	cbStop := f.callbacks.OnStoppedLeading
 	f.mu.Unlock()
+
+	if cbStop != nil {
+		cbStop()
+	}
 
 	return nil
 }
@@ -47,16 +51,32 @@ func (f *fakeLeaderElection) IsLeader() bool {
 	return f.isLeader
 }
 
+func (f *fakeLeaderElection) SetCallbacks(callbacks Callbacks) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.callbacks = callbacks
+}
+
+func (f *fakeLeaderElection) GetLeaderAddr() string {
+	return "127.0.0.1:9090"
+}
+
 func TestLeaderElectionPort(t *testing.T) {
 	t.Run("Run starts and stops leadership", func(t *testing.T) {
+		var mu sync.Mutex
 		var started, stopped bool
+
 		fake := &fakeLeaderElection{
 			callbacks: Callbacks{
 				OnStartedLeading: func(ctx context.Context) {
+					mu.Lock()
 					started = true
+					mu.Unlock()
 				},
 				OnStoppedLeading: func() {
+					mu.Lock()
 					stopped = true
+					mu.Unlock()
 				},
 			},
 		}
@@ -74,12 +94,20 @@ func TestLeaderElectionPort(t *testing.T) {
 		// Wait briefly to ensure leadership starts
 		time.Sleep(50 * time.Millisecond)
 		assert.True(t, fake.IsLeader(), "should be leader")
-		assert.True(t, started, "OnStartedLeading should be called")
+
+		mu.Lock()
+		isStarted := started
+		mu.Unlock()
+		assert.True(t, isStarted, "OnStartedLeading should be called")
 
 		// Wait for context to cancel
 		<-ctx.Done()
 		time.Sleep(50 * time.Millisecond) // Allow time for cleanup
 		assert.False(t, fake.IsLeader(), "should not be leader after context cancel")
-		assert.True(t, stopped, "OnStoppedLeading should be called")
+
+		mu.Lock()
+		isStopped := stopped
+		mu.Unlock()
+		assert.True(t, isStopped, "OnStoppedLeading should be called")
 	})
 }

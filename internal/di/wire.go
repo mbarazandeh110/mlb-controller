@@ -48,7 +48,8 @@ func NewContainer(configPath string) (*Container, error) {
 	loader := adapters_config.NewViperLoader(configPath, certLoader)
 	cfg, err := loader.Load()
 	if err != nil {
-		bootstrapLogger.Fatal("Failed to load config", logging.Field{Key: "error", Value: err})
+		bootstrapLogger.Error("Failed to load config", logging.Field{Key: "error", Value: err})
+		return nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
 	// Initialize production logger
@@ -95,7 +96,7 @@ func NewContainer(configPath string) (*Container, error) {
 	ctrl := mlb_controller.NewController(k8sClient, prodLogger, metricsAdapter, lbAdapters, cfg)
 
 	// Create App
-	app := application.NewApp(prodLogger, loader, metricsAdapter, leaderElectionAdapter, ctrl)
+	app := application.NewApp(prodLogger, cfg, metricsAdapter, leaderElectionAdapter, ctrl)
 
 	return &Container{
 		Logger:         prodLogger,

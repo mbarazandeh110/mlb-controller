@@ -3,29 +3,18 @@ package application
 import (
 	"context"
 	"errors"
-	"os"
-	"os/signal"
 	"sync"
 	"testing"
 	"time"
 
 	domain "mlb-controller/internal/domain/config"
+	"mlb-controller/internal/domain/model"
 	leaderelection_ports "mlb-controller/internal/ports/leaderelection"
 	logging_ports "mlb-controller/internal/ports/logging"
 	metrics_ports "mlb-controller/internal/ports/metrics"
 
 	"github.com/stretchr/testify/assert"
 )
-
-// fakeLoader implements config_ports.Loader for testing.
-type fakeLoader struct {
-	config *domain.Config
-	err    error
-}
-
-func (f *fakeLoader) Load() (*domain.Config, error) {
-	return f.config, f.err
-}
 
 // fakeMetrics implements metrics_ports.Metrics for testing.
 type fakeMetrics struct {
@@ -35,7 +24,7 @@ type fakeMetrics struct {
 	stopErr  error
 }
 
-func (f *fakeMetrics) Start(port int, uri string) error {
+func (f *fakeMetrics) Start() error {
 	f.started = true
 	return f.startErr
 }
@@ -45,6 +34,10 @@ func (f *fakeMetrics) Stop(ctx context.Context) error {
 	return f.stopErr
 }
 
+func (f *fakeMetrics) ProxyToLeader(ctx context.Context) error {
+	return nil
+}
+
 func (f *fakeMetrics) NewCounter(name, help string, labels []string) metrics_ports.Counter {
 	return nil
 }
@@ -52,6 +45,9 @@ func (f *fakeMetrics) NewGauge(name, help string, labels []string) metrics_ports
 func (f *fakeMetrics) NewHistogram(name, help string, labels []string) metrics_ports.Histogram {
 	return nil
 }
+func (f *fakeMetrics) UpdateBackendsTotal(upstream string, count float64)    {}
+func (f *fakeMetrics) IncrementSyncErrors(upstream string)                   {}
+func (f *fakeMetrics) ObserveSyncDuration(upstream string, duration float64) {}
 
 // fakeLeaderElection implements leaderelection_ports.LeaderElectionPort for testing.
 type fakeLeaderElection struct {
@@ -75,6 +71,31 @@ func (f *fakeLeaderElection) Run(ctx context.Context) error {
 }
 
 func (f *fakeLeaderElection) IsLeader() bool { return true }
+
+func (f *fakeLeaderElection) GetLeaderAddr() string { return "127.0.0.1:9090" }
+
+// fakeController implements controller.Controller for testing.
+type fakeController struct {
+	started       bool
+	syncUpstreams bool
+	startErr      error
+	syncErr       error
+}
+
+func (f *fakeController) Start(ctx context.Context) error {
+	f.started = true
+	<-ctx.Done()
+	return f.startErr
+}
+
+func (f *fakeController) SyncUpstreams(ctx context.Context) error {
+	f.syncUpstreams = true
+	return f.syncErr
+}
+
+func (f *fakeController) GetState() model.ControllerState {
+	return model.ControllerState{}
+}
 
 // fakeLogger implements logging_ports.Logger for testing.
 type fakeLogger struct {
@@ -104,98 +125,66 @@ func (f *fakeLogger) Messages() []string {
 
 func TestNewApp(t *testing.T) {
 	logger := &fakeLogger{}
-	loader := &fakeLoader{}
+	cfg := &domain.Config{}
 	metrics := &fakeMetrics{}
 	leaderElection := &fakeLeaderElection{}
+	ctrl := &fakeController{}
 
-	app := NewApp(logger, loader, metrics, leaderElection)
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
 
 	assert.NotNil(t, app)
 	assert.Equal(t, logger, app.logger)
-	assert.Equal(t, loader, app.loader)
+	assert.Equal(t, cfg, app.config)
 	assert.Equal(t, metrics, app.metrics)
 	assert.Equal(t, leaderElection, app.leaderElection)
-	assert.Nil(t, app.config)
+	assert.Equal(t, ctrl, app.controller)
 }
 
 func TestAppStart_Success(t *testing.T) {
 	logger := &fakeLogger{}
-	loader := &fakeLoader{
-		config: &domain.Config{Metrics: domain.MetricsConfig{Enabled: true, Port: 9090, URI: "/metrics"}},
-	}
+	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true, Port: 9090, URI: "/metrics"}}
 	metrics := &fakeMetrics{}
 	leaderElection := &fakeLeaderElection{}
-	var started bool
-	leaderElection.SetCallbacks(leaderelection_ports.Callbacks{
-		OnStartedLeading: func(ctx context.Context) { started = true },
-		OnStoppedLeading: func() {},
-	})
+	ctrl := &fakeController{}
 
-	app := NewApp(logger, loader, metrics, leaderElection)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-
-	// Mock signal
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, os.Interrupt)
-
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		sigCh <- os.Interrupt
-	}()
 
 	err := app.Start(ctx)
 
 	assert.NoError(t, err)
 	assert.True(t, metrics.started)
-	assert.True(t, started)
-	assert.Contains(t, logger.Messages(), "Configuration loaded successfully")
+	assert.Contains(t, logger.Messages(), "Starting application...")
 	assert.Contains(t, logger.Messages(), "Metrics server started")
-	assert.Contains(t, logger.Messages(), "Received shutdown signal")
-}
-
-func TestAppStart_ConfigLoadError(t *testing.T) {
-	logger := &fakeLogger{}
-	loader := &fakeLoader{err: errors.New("config load failed")}
-	metrics := &fakeMetrics{}
-	leaderElection := &fakeLeaderElection{}
-
-	app := NewApp(logger, loader, metrics, leaderElection)
-	ctx := context.Background()
-
-	err := app.Start(ctx)
-
-	assert.Error(t, err)
-	assert.Contains(t, logger.Messages(), "Failed to load config")
-	assert.Equal(t, "", app.config)
-	assert.False(t, metrics.started)
+	assert.Contains(t, logger.Messages(), "Context canceled, stopping application")
 }
 
 func TestAppStart_MetricsStartError(t *testing.T) {
 	logger := &fakeLogger{}
-	loader := &fakeLoader{
-		config: &domain.Config{Metrics: domain.MetricsConfig{Enabled: true, Port: 9090, URI: "/metrics"}},
-	}
+	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true, Port: 9090, URI: "/metrics"}}
 	metrics := &fakeMetrics{startErr: errors.New("metrics start failed")}
 	leaderElection := &fakeLeaderElection{}
+	ctrl := &fakeController{}
 
-	app := NewApp(logger, loader, metrics, leaderElection)
-	ctx := context.Background()
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	err := app.Start(ctx)
 
 	assert.Error(t, err)
 	assert.Contains(t, logger.Messages(), "Failed to start metrics server")
-	assert.False(t, metrics.started)
+	assert.True(t, metrics.started)
 }
 
 func TestAppStop_Success(t *testing.T) {
 	logger := &fakeLogger{}
-	loader := &fakeLoader{config: &domain.Config{Metrics: domain.MetricsConfig{Enabled: true}}}
+	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true}}
 	metrics := &fakeMetrics{}
 	leaderElection := &fakeLeaderElection{}
-	app := NewApp(logger, loader, metrics, leaderElection)
-	app.config = loader.config
+	ctrl := &fakeController{}
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
 
 	ctx := context.Background()
 	err := app.Stop(ctx)
@@ -206,11 +195,11 @@ func TestAppStop_Success(t *testing.T) {
 
 func TestAppStop_MetricsStopError(t *testing.T) {
 	logger := &fakeLogger{}
-	loader := &fakeLoader{config: &domain.Config{Metrics: domain.MetricsConfig{Enabled: true}}}
+	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true}}
 	metrics := &fakeMetrics{stopErr: errors.New("metrics stop failed")}
 	leaderElection := &fakeLeaderElection{}
-	app := NewApp(logger, loader, metrics, leaderElection)
-	app.config = loader.config
+	ctrl := &fakeController{}
+	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
 
 	ctx := context.Background()
 	err := app.Stop(ctx)

@@ -20,20 +20,21 @@ import (
 )
 
 type ControllerImpl struct {
-	k8sClient       kubernetes.KubernetesPort
-	logger          logging.Logger
-	metrics         metrics.Metrics
-	loadBalancers   map[string]loadbalancer.LoadBalancerAdapter
-	config          *config.Config
-	state           model.ControllerState
-	stateMutex      sync.RWMutex
-	serviceEvents   chan kubernetes.ServiceEvent
-	podEvents       chan kubernetes.PodEvent
-	nodeEvents      chan kubernetes.NodeEvent
-	syncTicker      *time.Ticker
-	syncStop        chan struct{}
-	syncUpstreamCtr metrics.Counter
-	queue           workqueue.RateLimitingInterface
+	k8sClient         kubernetes.KubernetesPort
+	logger            logging.Logger
+	metrics           metrics.Metrics
+	loadBalancers     map[string]loadbalancer.LoadBalancerAdapter
+	config            *config.Config
+	state             model.ControllerState
+	lastKnownServices map[string]model.Service
+	stateMutex        sync.RWMutex
+	serviceEvents     chan kubernetes.ServiceEvent
+	podEvents         chan kubernetes.PodEvent
+	nodeEvents        chan kubernetes.NodeEvent
+	syncTicker        *time.Ticker
+	syncStop          chan struct{}
+	syncUpstreamCtr   metrics.Counter
+	queue             workqueue.RateLimitingInterface
 }
 
 func NewController(
@@ -55,12 +56,13 @@ func NewController(
 			Nodes:     make(map[string]model.Node),
 			Upstreams: make(map[string]model.Upstream),
 		},
-		serviceEvents:   make(chan kubernetes.ServiceEvent, 500),
-		podEvents:       make(chan kubernetes.PodEvent, 2000),
-		nodeEvents:      make(chan kubernetes.NodeEvent, 500),
-		syncStop:        make(chan struct{}),
-		syncUpstreamCtr: metrics.NewCounter("sync_upstreams_total", "Total number of upstream sync operations", nil),
-		queue:           workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "mlb_sync_queue"),
+		lastKnownServices: make(map[string]model.Service),
+		serviceEvents:     make(chan kubernetes.ServiceEvent, 500),
+		podEvents:         make(chan kubernetes.PodEvent, 2000),
+		nodeEvents:        make(chan kubernetes.NodeEvent, 500),
+		syncStop:          make(chan struct{}),
+		syncUpstreamCtr:   metrics.NewCounter("sync_upstreams_total", "Total number of upstream sync operations", nil),
+		queue:             workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "mlb_sync_queue"),
 	}
 }
 
@@ -141,13 +143,76 @@ func (c *ControllerImpl) processNextItem(ctx context.Context) bool {
 func (c *ControllerImpl) syncHandler(ctx context.Context, key string) error {
 	c.stateMutex.RLock()
 	svc, exists := c.state.Services[key]
+	lastSvc, hadLast := c.lastKnownServices[key]
 	c.stateMutex.RUnlock()
 
 	if !exists {
+		if !hadLast {
+			return nil
+		}
+		if err := c.handleServiceDeletion(ctx, key, lastSvc); err != nil {
+			return err
+		}
+		c.stateMutex.Lock()
+		delete(c.lastKnownServices, key)
+		c.stateMutex.Unlock()
 		return nil
 	}
 
+	c.stateMutex.Lock()
+	c.lastKnownServices[key] = svc
+	c.stateMutex.Unlock()
+
 	return c.syncUpstreamsForService(ctx, svc)
+}
+
+func (c *ControllerImpl) handleServiceDeletion(ctx context.Context, key string, svc model.Service) error {
+	lbName := svc.Labels["mlb-loadbalancer-name"]
+	upstreamName := svc.Labels["mlb-upstream-name"]
+
+	if lbName == "" || upstreamName == "" {
+		return nil
+	}
+
+	// Check if another Service in the cluster still targets this (lbName, upstreamName)
+	c.stateMutex.RLock()
+	var otherSvc *model.Service
+	for _, s := range c.state.Services {
+		if s.Labels["mlb-loadbalancer-name"] == lbName && s.Labels["mlb-upstream-name"] == upstreamName {
+			copied := s
+			otherSvc = &copied
+			break
+		}
+	}
+	c.stateMutex.RUnlock()
+
+	if otherSvc != nil {
+		// Another service still targets the upstream; resync with its state
+		return c.syncUpstreamsForService(ctx, *otherSvc)
+	}
+
+	// No other Service targets this upstream; purge it from state and drain on the LB
+	lbConfig, _ := c.getLoadBalancerConfig(lbName)
+	emptyUpstream := &model.Upstream{
+		Name:         upstreamName,
+		LoadBalancer: lbName,
+		Backends:     []model.Backend{},
+		Type:         c.getLoadBalancerType(lbName),
+		Config:       lbConfig,
+	}
+
+	c.stateMutex.Lock()
+	delete(c.state.Upstreams, fmt.Sprintf("%s/%s", lbName, upstreamName))
+	c.stateMutex.Unlock()
+
+	c.metrics.UpdateBackendsTotal(upstreamName, 0)
+
+	if err := c.syncLoadBalancerUpstream(ctx, emptyUpstream); err != nil {
+		c.metrics.IncrementSyncErrors(upstreamName)
+		return err
+	}
+
+	return nil
 }
 
 func (c *ControllerImpl) processEvents(ctx context.Context) {
@@ -171,6 +236,7 @@ func (c *ControllerImpl) handleServiceEvent(event kubernetes.ServiceEvent) {
 	switch event.Type {
 	case kubernetes.EventTypeAdd, kubernetes.EventTypeUpdate:
 		c.state.Services[key] = event.Service
+		c.lastKnownServices[key] = event.Service
 	case kubernetes.EventTypeDelete:
 		delete(c.state.Services, key)
 	}
@@ -194,12 +260,13 @@ func (c *ControllerImpl) handlePodEvent(event kubernetes.PodEvent) {
 }
 
 func (c *ControllerImpl) handleNodeEvent(event kubernetes.NodeEvent) {
+	key := event.Node.Name
 	c.stateMutex.Lock()
 	switch event.Type {
 	case kubernetes.EventTypeAdd, kubernetes.EventTypeUpdate:
-		c.state.Nodes[event.Node.Name] = event.Node
+		c.state.Nodes[key] = event.Node
 	case kubernetes.EventTypeDelete:
-		delete(c.state.Nodes, event.Node.Name)
+		delete(c.state.Nodes, key)
 	}
 	c.stateMutex.Unlock()
 
@@ -246,7 +313,7 @@ func (c *ControllerImpl) syncUpstreamsForService(ctx context.Context, svc model.
 		return fmt.Errorf("failed to get pods for service %s/%s: %w", svc.Namespace, svc.Name, err)
 	}
 
-	upstream := c.buildUpstream(svc, pods)
+	upstream := c.buildUpstream(ctx, svc, pods)
 	if upstream == nil {
 		c.metrics.UpdateBackendsTotal(upstreamName, 0)
 		return nil
@@ -255,7 +322,7 @@ func (c *ControllerImpl) syncUpstreamsForService(ctx context.Context, svc model.
 	c.metrics.UpdateBackendsTotal(upstreamName, float64(len(upstream.Backends)))
 
 	key := fmt.Sprintf("%s/%s", lbName, upstreamName)
-	
+
 	c.stateMutex.Lock()
 	c.state.Upstreams[key] = *upstream
 	c.stateMutex.Unlock()
@@ -313,7 +380,7 @@ func (c *ControllerImpl) SyncUpstreams(ctx context.Context) error {
 			continue
 		}
 
-		if upstream := c.buildUpstream(svc, pods); upstream != nil {
+		if upstream := c.buildUpstream(ctx, svc, pods); upstream != nil {
 			if _, exists := desiredState[lbName]; !exists {
 				desiredState[lbName] = make(map[string]model.Upstream)
 			}
@@ -345,24 +412,24 @@ func (c *ControllerImpl) SyncUpstreams(ctx context.Context) error {
 		c.metrics.IncrementSyncErrors("two_way_reconciliation")
 		return fmt.Errorf("drift reconciliation errors: %v", errs)
 	}
-	
+
 	return nil
 }
 
-func (c *ControllerImpl) buildUpstream(svc model.Service, pods []model.Pod) *model.Upstream {
+func (c *ControllerImpl) buildUpstream(ctx context.Context, svc model.Service, pods []model.Pod) *model.Upstream {
 	lbName := svc.Labels["mlb-loadbalancer-name"]
 	upstreamName := svc.Labels["mlb-upstream-name"]
-	if svc.NodePort == 0 {
+	if svc.NodePort == 0 || lbName == "" || upstreamName == "" {
 		return nil
 	}
 
-	var backends []model.Backend
+	backends := make([]model.Backend, 0)
 	for _, pod := range pods {
 		if !pod.Ready || pod.NodeName == "" {
 			continue
 		}
 
-		node, err := c.k8sClient.GetNodeByName(context.Background(), pod.NodeName)
+		node, err := c.k8sClient.GetNodeByName(ctx, pod.NodeName)
 		if err != nil {
 			continue
 		}
@@ -385,10 +452,6 @@ func (c *ControllerImpl) buildUpstream(svc model.Service, pods []model.Pod) *mod
 			Port:   svc.NodePort,
 			Weight: 1,
 		})
-	}
-
-	if len(backends) == 0 {
-		return nil
 	}
 
 	lbConfig, _ := c.getLoadBalancerConfig(lbName)
@@ -451,5 +514,28 @@ func (c *ControllerImpl) matchLabels(podLabels, svcSelector map[string]string) b
 func (c *ControllerImpl) GetState() model.ControllerState {
 	c.stateMutex.RLock()
 	defer c.stateMutex.RUnlock()
-	return c.state
+
+	services := make(map[string]model.Service, len(c.state.Services))
+	for k, v := range c.state.Services {
+		services[k] = v
+	}
+	pods := make(map[string]model.Pod, len(c.state.Pods))
+	for k, v := range c.state.Pods {
+		pods[k] = v
+	}
+	nodes := make(map[string]model.Node, len(c.state.Nodes))
+	for k, v := range c.state.Nodes {
+		nodes[k] = v
+	}
+	upstreams := make(map[string]model.Upstream, len(c.state.Upstreams))
+	for k, v := range c.state.Upstreams {
+		upstreams[k] = v
+	}
+
+	return model.ControllerState{
+		Services:  services,
+		Pods:      pods,
+		Nodes:     nodes,
+		Upstreams: upstreams,
+	}
 }

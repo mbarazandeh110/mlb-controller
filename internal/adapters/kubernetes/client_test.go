@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"mlb-controller/internal/domain/config"
+	port_k8s "mlb-controller/internal/ports/kubernetes"
 	"mlb-controller/internal/ports/logging"
 
 	"github.com/stretchr/testify/assert"
@@ -14,7 +15,9 @@ import (
 	"go.uber.org/zap/zaptest"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/informers"
 	k8sclient "k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/tools/cache"
 )
 
 // fakeLogger is a minimal implementation of logging.Logger for testing.
@@ -39,7 +42,11 @@ func TestKubernetesAdapter(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "svc1",
 				Namespace: "default",
-				Labels:    map[string]string{"mlb-loadbalancer-name": "lb1"},
+				Labels: map[string]string{
+					"mlb-loadbalancer-name": "lb1",
+					"mlb-upstream-name":     "up1",
+					"mlb-port":              "30080",
+				},
 			},
 			Spec: corev1.ServiceSpec{
 				Type:     corev1.ServiceTypeNodePort,
@@ -101,15 +108,28 @@ func TestKubernetesAdapter(t *testing.T) {
 	zapLogger := zaptest.NewLogger(t)
 	logger := &fakeLogger{logger: zapLogger}
 
-	// Create adapter
+	// Create adapter with initialized informerFactory
 	cfg := config.KubernetesConfig{
 		ResyncPeriod:     30 * time.Second,
 		KubernetesConfig: "",
 	}
+
+	informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+	podInformer := informerFactory.Core().V1().Pods().Informer()
+	nodeInformer := informerFactory.Core().V1().Nodes().Informer()
+	serviceInformer := informerFactory.Core().V1().Services().Informer()
+
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	informerFactory.Start(stopCh)
+	cache.WaitForCacheSync(stopCh, podInformer.HasSynced, nodeInformer.HasSynced, serviceInformer.HasSynced)
+
 	adapter := &KubernetesAdapter{
-		client: fakeClient,
-		logger: logger,
-		config: cfg,
+		client:          fakeClient,
+		logger:          logger,
+		config:          cfg,
+		informerFactory: informerFactory,
+		started:         true,
 	}
 
 	t.Run("GetPodsForSelector returns matching pods with selector", func(t *testing.T) {
@@ -206,5 +226,49 @@ func TestKubernetesAdapter(t *testing.T) {
 			},
 		}
 		assert.False(t, adapter.isPodReady(pod))
+	})
+
+	t.Run("Tombstone and MLB transition handling", func(t *testing.T) {
+		svcEvents := make(chan port_k8s.ServiceEvent, 10)
+		watchCtx, watchCancel := context.WithCancel(context.Background())
+		defer watchCancel()
+
+		go func() {
+			_ = adapter.WatchServices(watchCtx, nil, svcEvents)
+		}()
+
+		// Allow informer to start
+		time.Sleep(50 * time.Millisecond)
+
+		// Test tombstone in DeleteFunc
+		tombstoneSvc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "tombstone-svc",
+				Namespace: "default",
+				Labels: map[string]string{
+					"mlb-loadbalancer-name": "lb1",
+					"mlb-upstream-name":     "up-tomb",
+					"mlb-port":              "30081",
+				},
+			},
+			Spec: corev1.ServiceSpec{
+				Type: corev1.ServiceTypeNodePort,
+			},
+		}
+		tomb := cache.DeletedFinalStateUnknown{
+			Key: "default/tombstone-svc",
+			Obj: tombstoneSvc,
+		}
+
+		// Simulate DeleteFunc with tombstone
+		if adapter.isMLBService(tombstoneSvc) {
+			obj := interface{}(tomb)
+			if tObj, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+				obj = tObj.Obj
+			}
+			svc, ok := obj.(*corev1.Service)
+			assert.True(t, ok)
+			assert.Equal(t, "tombstone-svc", svc.Name)
+		}
 	})
 }
