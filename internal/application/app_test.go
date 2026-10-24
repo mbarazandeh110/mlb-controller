@@ -19,13 +19,15 @@ import (
 
 // fakeMetrics implements metrics_ports.Metrics for testing.
 type fakeMetrics struct {
-	mu       sync.RWMutex
-	started  bool
-	stopped  bool
-	proxied  bool
-	startErr error
-	stopErr  error
-	proxyErr error
+	mu           sync.RWMutex
+	started      bool
+	stopped      bool
+	proxied      bool
+	startErr     error
+	stopErr      error
+	proxyErr     error
+	readyChecker func() bool
+	isLeader     bool
 }
 
 func (f *fakeMetrics) Start() error {
@@ -47,6 +49,30 @@ func (f *fakeMetrics) ProxyToLeader(ctx context.Context) error {
 	defer f.mu.Unlock()
 	f.proxied = true
 	return f.proxyErr
+}
+
+func (f *fakeMetrics) SetReadyChecker(checker func() bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.readyChecker = checker
+}
+
+func (f *fakeMetrics) SetLeader(isLeader bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.isLeader = isLeader
+}
+
+func (f *fakeMetrics) GetLeader() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.isLeader
+}
+
+func (f *fakeMetrics) HasReadyChecker() bool {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	return f.readyChecker != nil
 }
 
 func (f *fakeMetrics) IsStarted() bool {
@@ -102,13 +128,14 @@ func (f *fakeLeaderElection) Run(ctx context.Context) error {
 	f.mu.RLock()
 	cb := f.callbacks
 	runErr := f.runErr
+	isLeader := f.leader
 	f.mu.RUnlock()
 
-	if cb.OnStartedLeading != nil {
+	if isLeader && cb.OnStartedLeading != nil {
 		cb.OnStartedLeading(ctx)
 	}
 	<-ctx.Done()
-	if cb.OnStoppedLeading != nil {
+	if isLeader && cb.OnStoppedLeading != nil {
 		cb.OnStoppedLeading()
 	}
 	return runErr
@@ -168,6 +195,10 @@ func (f *fakeController) HasSyncedUpstreams() bool {
 
 func (f *fakeController) GetState() model.ControllerState {
 	return model.ControllerState{}
+}
+
+func (f *fakeController) HasSynced() bool {
+	return true
 }
 
 // fakeLogger implements logging_ports.Logger for testing.
@@ -319,18 +350,20 @@ func TestApp_LeaderElection_Callbacks_OnStartedAndStoppedLeading(t *testing.T) {
 	}()
 
 	require.Eventually(t, func() bool {
-		return ctrl.IsStarted() && ctrl.HasSyncedUpstreams()
+		return ctrl.IsStarted() && ctrl.HasSyncedUpstreams() && metrics.GetLeader()
 	}, 2*time.Second, 10*time.Millisecond)
 
 	assert.True(t, logger.HasMessage("Started leading, initializing controller"))
+	assert.True(t, metrics.GetLeader(), "metrics should report leader status as true")
 
 	// Stop app to trigger OnStoppedLeading
 	cancel()
 	<-runDone
 
 	require.Eventually(t, func() bool {
-		return logger.HasMessage("Stopped leading, shutting down controller")
+		return logger.HasMessage("Stopped leading, shutting down controller") && !metrics.GetLeader()
 	}, 1*time.Second, 10*time.Millisecond)
+	assert.False(t, metrics.GetLeader(), "metrics should report leader status as false after stopping")
 }
 
 func TestApp_LeaderElection_ControllerStartError(t *testing.T) {
@@ -388,38 +421,34 @@ func TestApp_LeaderElection_RunError(t *testing.T) {
 	}, 1*time.Second, 10*time.Millisecond)
 }
 
-func TestApp_NonLeader_ProxyMetrics(t *testing.T) {
+func TestApp_ReadinessChecker_Wired(t *testing.T) {
 	logger := &fakeLogger{}
 	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true, Port: 9090, URI: "/metrics"}}
 	metrics := &fakeMetrics{}
-	leaderElection := newFakeLeaderElection(false) // non-leader
+	leaderElection := newFakeLeaderElection(true)
 	ctrl := &fakeController{}
 
 	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	_ = app.Start(ctx)
 
-	require.Eventually(t, func() bool {
-		return metrics.IsProxied() && logger.HasMessage("Non-leader instance, proxying metrics")
-	}, 1*time.Second, 10*time.Millisecond)
+	assert.True(t, metrics.HasReadyChecker(), "App.Start must wire readiness checker on metrics")
 }
 
-func TestApp_NonLeader_ProxyMetricsError(t *testing.T) {
+func TestApp_NonLeader_MetricsReportsStandby(t *testing.T) {
 	logger := &fakeLogger{}
 	cfg := &domain.Config{Metrics: domain.MetricsConfig{Enabled: true, Port: 9090, URI: "/metrics"}}
-	metrics := &fakeMetrics{proxyErr: errors.New("proxy error")}
-	leaderElection := newFakeLeaderElection(false) // non-leader
+	metrics := &fakeMetrics{}
+	leaderElection := newFakeLeaderElection(false) // non-leader (standby)
 	ctrl := &fakeController{}
 
 	app := NewApp(logger, cfg, metrics, leaderElection, ctrl)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
 	_ = app.Start(ctx)
 
-	require.Eventually(t, func() bool {
-		return logger.HasMessage("Failed to proxy metrics to leader")
-	}, 1*time.Second, 10*time.Millisecond)
+	assert.False(t, metrics.GetLeader(), "Non-leader instance must report leadership status as false")
 }

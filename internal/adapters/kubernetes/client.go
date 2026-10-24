@@ -244,6 +244,15 @@ func (k *KubernetesAdapter) GetNodeByName(ctx context.Context, name string) (mod
 	return k.mapNode(node), nil
 }
 
+func (k *KubernetesAdapter) HasSynced() bool {
+	if k.informerFactory == nil {
+		return false
+	}
+	return k.informerFactory.Core().V1().Services().Informer().HasSynced() &&
+		k.informerFactory.Core().V1().Pods().Informer().HasSynced() &&
+		k.informerFactory.Core().V1().Nodes().Informer().HasSynced()
+}
+
 func (k *KubernetesAdapter) mapService(svc *corev1.Service) model.Service {
 	return model.Service{
 		Name:        svc.Name,

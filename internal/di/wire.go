@@ -76,6 +76,7 @@ func NewContainer(configPath string) (*Container, error) {
 
 	// Initialize metrics adapter
 	metricsAdapter := adapters_metrics.NewPrometheusAdapter(prodLogger, leaderElectionAdapter, cfg.Metrics)
+	metricsAdapter.SetReadyChecker(k8sClient.HasSynced)
 
 	// Initialize load balancer adapters using Factory
 	factory := adapters_loadbalancer.NewLoadBalancerFactory()

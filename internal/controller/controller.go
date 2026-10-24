@@ -542,3 +542,11 @@ func (c *ControllerImpl) GetState() model.ControllerState {
 		Upstreams: upstreams,
 	}
 }
+
+// HasSynced returns true if the controller's underlying informers have synchronized.
+func (c *ControllerImpl) HasSynced() bool {
+	if c.k8sClient == nil {
+		return false
+	}
+	return c.k8sClient.HasSynced()
+}

@@ -22,6 +22,9 @@ type KubernetesPort interface {
 
 	// GetNodeByName retrieves a Node by its name.
 	GetNodeByName(ctx context.Context, name string) (model.Node, error)
+
+	// HasSynced returns true if the informer caches have synchronized.
+	HasSynced() bool
 }
 
 // ServiceEvent represents an event related to a Kubernetes Service.

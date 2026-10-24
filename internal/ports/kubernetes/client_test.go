@@ -96,6 +96,10 @@ func (f *fakeKubernetes) GetNodeByName(ctx context.Context, name string) (model.
 	return node, nil
 }
 
+func (f *fakeKubernetes) HasSynced() bool {
+	return true
+}
+
 func TestKubernetesPort(t *testing.T) {
 	fake := &fakeKubernetes{
 		services: map[string]model.Service{

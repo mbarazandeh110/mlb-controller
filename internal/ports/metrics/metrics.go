@@ -32,6 +32,10 @@ type Metrics interface {
 	// Stop gracefully shuts down the metrics server.
 	Stop(ctx context.Context) error
 	ProxyToLeader(ctx context.Context) error
+	// SetReadyChecker registers a callback function used by /readyz to determine readiness.
+	SetReadyChecker(checker func() bool)
+	// SetLeader updates the mlb_is_leader metric (1 = leader, 0 = standby).
+	SetLeader(isLeader bool)
 	// Metrics-specific methods
 	UpdateBackendsTotal(upstream string, count float64)
 	IncrementSyncErrors(upstream string)

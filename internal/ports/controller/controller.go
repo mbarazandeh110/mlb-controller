@@ -14,4 +14,6 @@ type Controller interface {
 	SyncUpstreams(ctx context.Context) error
 	// GetState returns the current state of the controller.
 	GetState() model.ControllerState
+	// HasSynced returns true if the controller's underlying informers have synchronized.
+	HasSynced() bool
 }

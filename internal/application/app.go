@@ -3,7 +3,6 @@ package application
 
 import (
 	"context"
-	"time"
 
 	domain "mlb-controller/internal/domain/config"
 	"mlb-controller/internal/ports/controller"
@@ -44,6 +43,16 @@ func NewApp(
 func (a *App) Start(ctx context.Context) error {
 	a.logger.Info("Starting application...", logging_ports.Field{Key: "app", Value: "mlb-controller"})
 
+	// Wire readiness checker
+	if a.controller != nil && a.metrics != nil {
+		a.metrics.SetReadyChecker(a.controller.HasSynced)
+	}
+
+	// Initialize leadership state on metrics
+	if a.metrics != nil && a.leaderElection != nil {
+		a.metrics.SetLeader(a.leaderElection.IsLeader())
+	}
+
 	// Start metrics server if enabled
 	if a.config != nil && a.config.Metrics.Enabled {
 		if err := a.metrics.Start(); err != nil {
@@ -57,6 +66,9 @@ func (a *App) Start(ctx context.Context) error {
 	a.leaderElection.SetCallbacks(leaderelection.Callbacks{
 		OnStartedLeading: func(ctx context.Context) {
 			a.logger.Info("Started leading, initializing controller")
+			if a.metrics != nil {
+				a.metrics.SetLeader(true)
+			}
 			// Start controller for leader
 			go func() {
 				if err := a.controller.Start(ctx); err != nil {
@@ -72,6 +84,9 @@ func (a *App) Start(ctx context.Context) error {
 		},
 		OnStoppedLeading: func() {
 			a.logger.Info("Stopped leading, shutting down controller")
+			if a.metrics != nil {
+				a.metrics.SetLeader(false)
+			}
 			// No explicit controller cleanup needed, as context cancellation handles it
 		},
 	})
@@ -80,28 +95,6 @@ func (a *App) Start(ctx context.Context) error {
 	go func() {
 		if err := a.leaderElection.Run(ctx); err != nil {
 			a.logger.Error("Leader election failed", logging_ports.Field{Key: "error", Value: err})
-		}
-	}()
-
-	// Handle metrics proxy for non-leader instances
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				if a.config != nil && !a.leaderElection.IsLeader() && a.config.Metrics.Enabled {
-					a.logger.Info("Non-leader instance, proxying metrics")
-					if err := a.metrics.ProxyToLeader(ctx); err != nil {
-						a.logger.Error("Failed to proxy metrics to leader",
-							logging_ports.Field{Key: "error", Value: err})
-					}
-					// Wait before retrying to avoid flooding
-					time.Sleep(5 * time.Second)
-				} else {
-					time.Sleep(1 * time.Second) // Check periodically
-				}
-			}
 		}
 	}()
 

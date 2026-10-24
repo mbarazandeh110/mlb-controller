@@ -2,22 +2,20 @@
 package metrics
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
-	"time"
+	"strings"
+	"sync"
 
+	domain "mlb-controller/internal/domain/config"
 	"mlb-controller/internal/ports/leaderelection"
 	"mlb-controller/internal/ports/logging"
 	"mlb-controller/internal/ports/metrics"
 
-	domain "mlb-controller/internal/domain/config"
-
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"github.com/prometheus/common/expfmt"
 )
 
 // prometheusCounter implements the metrics.Counter interface.
@@ -73,7 +71,14 @@ type PrometheusAdapter struct {
 	httpServer     *http.Server
 	logger         logging.Logger
 	leaderElection leaderelection.LeaderElectionPort
-	metricsConfig  domain.MetricsConfig // Added for URI and Port
+	metricsConfig  domain.MetricsConfig
+
+	readyChecker func() bool
+	readyMutex   sync.RWMutex
+
+	isLeader      bool
+	isLeaderMutex sync.RWMutex
+
 	// Metrics
 	mlbBackendsTotal       *prometheus.GaugeVec
 	mlbSyncErrorsTotal     *prometheus.CounterVec
@@ -109,10 +114,10 @@ func NewPrometheusAdapter(logger logging.Logger, leaderElection leaderelection.L
 		[]string{"upstream"},
 	)
 
-	// Register metrics
+	// Register core metrics
 	reg.MustRegister(mlbBackendsTotal, mlbSyncErrorsTotal, mlbSyncDurationSeconds)
 
-	return &PrometheusAdapter{
+	p := &PrometheusAdapter{
 		registry:               reg,
 		logger:                 logger,
 		leaderElection:         leaderElection,
@@ -121,6 +126,42 @@ func NewPrometheusAdapter(logger logging.Logger, leaderElection leaderelection.L
 		mlbSyncErrorsTotal:     mlbSyncErrorsTotal,
 		mlbSyncDurationSeconds: mlbSyncDurationSeconds,
 	}
+
+	// Register mlb_is_leader dynamic gauge (1 = leader, 0 = standby)
+	mlbIsLeader := prometheus.NewGaugeFunc(
+		prometheus.GaugeOpts{
+			Name: "mlb_is_leader",
+			Help: "Leadership status of this controller replica (1 = leader, 0 = standby)",
+		},
+		func() float64 {
+			p.isLeaderMutex.RLock()
+			defer p.isLeaderMutex.RUnlock()
+			if p.isLeader {
+				return 1
+			}
+			if p.leaderElection != nil && p.leaderElection.IsLeader() {
+				return 1
+			}
+			return 0
+		},
+	)
+	reg.MustRegister(mlbIsLeader)
+
+	return p
+}
+
+// SetReadyChecker sets a callback function to determine readiness (/readyz).
+func (p *PrometheusAdapter) SetReadyChecker(checker func() bool) {
+	p.readyMutex.Lock()
+	defer p.readyMutex.Unlock()
+	p.readyChecker = checker
+}
+
+// SetLeader updates the leadership status for the mlb_is_leader metric.
+func (p *PrometheusAdapter) SetLeader(isLeader bool) {
+	p.isLeaderMutex.Lock()
+	defer p.isLeaderMutex.Unlock()
+	p.isLeader = isLeader
 }
 
 func (p *PrometheusAdapter) NewCounter(name, help string, labels []string) metrics.Counter {
@@ -153,15 +194,55 @@ func (p *PrometheusAdapter) NewHistogram(name, help string, labels []string) met
 	return &prometheusHistogram{promHistogram: histogram}
 }
 
-// Start launches the HTTP server to expose metrics.
+// Handler returns the HTTP handler exposing the configured metrics URI, /healthz, and /readyz.
+func (p *PrometheusAdapter) Handler() http.Handler {
+	mux := http.NewServeMux()
+
+	metricsURI := p.metricsConfig.URI
+	if metricsURI == "" {
+		metricsURI = "/metrics"
+	}
+	if !strings.HasPrefix(metricsURI, "/") {
+		metricsURI = "/" + metricsURI
+	}
+
+	mux.Handle(metricsURI, promhttp.HandlerFor(p.registry, promhttp.HandlerOpts{}))
+
+	// Liveness probe endpoint (/healthz)
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	// Readiness probe endpoint (/readyz)
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		p.readyMutex.RLock()
+		checker := p.readyChecker
+		p.readyMutex.RUnlock()
+
+		if checker != nil && !checker() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("informers not synced"))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	return mux
+}
+
+// Start launches the HTTP server to expose metrics, liveness (/healthz), and readiness (/readyz).
 func (p *PrometheusAdapter) Start() error {
 	addr := fmt.Sprintf(":%d", p.metricsConfig.Port)
 	p.httpServer = &http.Server{
 		Addr:    addr,
-		Handler: promhttp.HandlerFor(p.registry, promhttp.HandlerOpts{}),
+		Handler: p.Handler(),
 	}
 	go func() {
-		if err := p.httpServer.ListenAndServe(); err != http.ErrServerClosed {
+		if err := p.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			p.logger.Error("Metrics server failed",
 				logging.Field{Key: "error", Value: err})
 		}
@@ -178,52 +259,11 @@ func (p *PrometheusAdapter) Stop(ctx context.Context) error {
 		return nil
 	}
 
-	// Use the provided context to gracefully shut down the server.
-	// This will wait for active connections to finish.
 	return p.httpServer.Shutdown(ctx)
 }
 
-// ProxyToLeader sends local metrics to the leader instance.
+// ProxyToLeader is kept for interface compatibility; leadership state is exposed via mlb_is_leader.
 func (p *PrometheusAdapter) ProxyToLeader(ctx context.Context) error {
-	leaderAddr := p.leaderElection.GetLeaderAddr()
-	if leaderAddr == "" {
-		return fmt.Errorf("leader address not available")
-	}
-
-	// Collect metrics from the local registry
-	var buf bytes.Buffer
-	enc := expfmt.NewEncoder(&buf, expfmt.NewFormat(expfmt.TypeTextPlain))
-	families, err := p.registry.Gather()
-	if err != nil {
-		return fmt.Errorf("failed to gather metrics: %w", err)
-	}
-	for _, f := range families {
-		if err := enc.Encode(f); err != nil {
-			return fmt.Errorf("failed to encode metrics: %w", err)
-		}
-	}
-
-	// Send metrics to the leader
-	url := fmt.Sprintf("http://%s:%d/%s", leaderAddr, p.metricsConfig.Port, p.metricsConfig.URI)
-	req, err := http.NewRequestWithContext(ctx, "POST", url, &buf)
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-	req.Header.Set("Content-Type", string(expfmt.FmtText))
-
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to send metrics to leader: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("failed to proxy metrics, status: %d", resp.StatusCode)
-	}
-
-	p.logger.Info("Successfully proxied metrics to leader",
-		logging.Field{Key: "leader", Value: url})
 	return nil
 }
 

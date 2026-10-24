@@ -632,3 +632,30 @@ func TestKubernetesAdapter_GetNodeByName(t *testing.T) {
 		assert.Equal(t, "192.168.1.10", res.InternalIP)
 	})
 }
+
+func TestKubernetesAdapter_HasSynced(t *testing.T) {
+	fakeClient := k8sclient.NewSimpleClientset()
+	informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+	// Touch informers to instantiate them
+	_ = informerFactory.Core().V1().Services().Informer()
+	_ = informerFactory.Core().V1().Pods().Informer()
+	_ = informerFactory.Core().V1().Nodes().Informer()
+
+	adapter := &KubernetesAdapter{
+		client:          fakeClient,
+		logger:          &fakeLogger{},
+		informerFactory: informerFactory,
+	}
+
+	assert.False(t, adapter.HasSynced(), "before informer start, HasSynced should be false")
+
+	stopCh := make(chan struct{})
+	defer close(stopCh)
+	informerFactory.Start(stopCh)
+	informerFactory.WaitForCacheSync(stopCh)
+
+	assert.True(t, adapter.HasSynced(), "after informer cache sync, HasSynced should be true")
+
+	nilAdapter := &KubernetesAdapter{informerFactory: nil}
+	assert.False(t, nilAdapter.HasSynced(), "nil informerFactory should return false")
+}

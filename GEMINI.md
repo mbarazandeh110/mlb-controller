@@ -1,12 +1,15 @@
 # Project Context: mlb-controller (Multi Load Balancer Controller)
 
-First of all read all rules (.agent/rules/*) and all skills (.agent/skills/*/SKILL.md)
+First of all read all rules (.agent/rules/*) and all skills (.agent/skills/*/SKILL.md) and always use golang-pro skill.
 
 ## 1. Overview & Purpose
+
 `mlb-controller` is an enterprise Kubernetes controller written in Go (v1.24.6) that dynamically synchronizes upstream backend servers in external CDN/Edge load balancers (outside the K8s cluster) based on the state of Kubernetes `NodePort` and `LoadBalancer` Services.
 
 ### Target Service Identification
+
 A Kubernetes Service is managed by `mlb-controller` if and only if:
+
 - `spec.type` is `NodePort` or `LoadBalancer`.
 - It contains the labels:
   - `mlb-loadbalancer-name`: Target LB name defined in `config.yaml`.
@@ -14,6 +17,7 @@ A Kubernetes Service is managed by `mlb-controller` if and only if:
   - `mlb-port`: NodePort used for routing traffic to the nodes.
 
 ### Core Business Flow
+
 1. Watch `Services`, `Pods`, and `Nodes` via `client-go` `SharedInformerFactory` and local cache `Lister` (`internal/adapters/kubernetes/client.go`).
 2. Filter `Ready` Pods matching the Service selector and resolve their hosting Node's `InternalIP` (fallback to `ExternalIP`).
 3. Apply NAT-like IP/CIDR replacement rules (`internal/util/ip_replacement.go`) with priority: `LB IPs > Global IPs > LB Nets > Global Nets` (supports IPv4 and IPv6).
@@ -23,7 +27,9 @@ A Kubernetes Service is managed by `mlb-controller` if and only if:
 ---
 
 ## 2. Architecture: Hexagonal (Ports & Adapters)
+
 Strict separation of concerns must be maintained across all packages:
+
 - `cmd/mlb-controller/main.go`: Entrypoint, OS signal handling (`SIGINT`, `SIGTERM`), DI container bootstrap, and graceful shutdown.
 - `internal/domain/model`: Pure domain entities (`Service`, `Pod`, `Node`, `Upstream`, `Backend`, `ControllerState`). Zero external dependencies.
 - `internal/domain/config`: Configuration structs (`Config`, `NginxConfig`, `EnvoyConfig`, `LeaderElectionConfig`, `GlobalIPReplacementList`) and `ApplyDefaultValues`.
@@ -44,7 +50,9 @@ Strict separation of concerns must be maintained across all packages:
 ---
 
 ## 3. Build, Test & Verification Commands
+
 Always use the `Makefile` targets to verify changes:
+
 - Build binary: `make build`
 - Format & Vet: `make fmt && make vet`
 - Lint: `make lint` (`golangci-lint run`)
@@ -55,7 +63,9 @@ Always use the `Makefile` targets to verify changes:
 ---
 
 ## 4. Current Priority & Known Technical Debt (Phase 1 Focus: Core & NGINX)
+
 Before implementing Envoy or HAProxy adapters, the following known issues in Core and NGINX must be resolved:
+
 1. **Broken Test Suite**: `nginx_test.go`, `app_test.go`, and `kubernetes/client_test.go` are out of sync with recent signatures (`NewNginxAdapter`, `SyncUpstream`, `NewApp`, and `informerFactory` initialization). `controller_test.go` is missing.
 2. **NGINX TLS RootCA Bug**: In `internal/adapters/loadbalancer/nginx/client.go`, `x509.NewCertPool()` is instantiated when `len(ngx.CA) > 0`, but `AppendCertsFromPEM(ngx.CA)` is never called.
 3. **NGINX Concurrency Semaphore**: `SyncAllUpstreams` in `internal/adapters/loadbalancer/nginx/nginx.go` does not acquire `a.semaphore`, risking connection spikes during periodic bulk reconciliation.

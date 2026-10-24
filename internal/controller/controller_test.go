@@ -50,6 +50,8 @@ func (f *fakeMetrics) NewHistogram(name, help string, labels []string) metrics.H
 func (f *fakeMetrics) Start() error                            { return nil }
 func (f *fakeMetrics) Stop(ctx context.Context) error          { return nil }
 func (f *fakeMetrics) ProxyToLeader(ctx context.Context) error { return nil }
+func (f *fakeMetrics) SetReadyChecker(checker func() bool)     {}
+func (f *fakeMetrics) SetLeader(isLeader bool)                 {}
 func (f *fakeMetrics) UpdateBackendsTotal(upstream string, count float64) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -165,6 +167,10 @@ func (f *fakeK8sPort) GetNodeByName(ctx context.Context, name string) (model.Nod
 		return model.Node{Name: name, InternalIP: "192.168.1.100"}, nil
 	}
 	return node, nil
+}
+
+func (f *fakeK8sPort) HasSynced() bool {
+	return true
 }
 
 func setupTestController(t *testing.T) (*ControllerImpl, *fakeLBAdapter, *fakeK8sPort, *fakeMetrics) {
