@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"mlb-controller/internal/domain/config"
 	"mlb-controller/internal/domain/model"
@@ -17,302 +19,79 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
-// NginxAdapter implements the LoadBalancerAdapter interface for NGINX.
-// It manages multiple NGINX clients and uses a semaphore for concurrency control.
 type NginxAdapter struct {
-	clients   []*NginxClient            // List of NGINX clients for each address
-	config    config.LoadBalancerConfig // Load balancer configuration
-	logger    logging.Logger            // Logger for logging operations
-	semaphore *semaphore.Weighted       // Semaphore to limit concurrent requests
+	clients   []*NginxClient
+	config    config.NginxConfig
+	logger    logging.Logger
+	semaphore *semaphore.Weighted
+
+	// مکانیزم In-Memory Cache برای جلوگیری از بمباران API (رفع خطای O(N))
+	cache      map[string]map[string][]model.Backend // clientBaseURL -> upstreamName -> backends
+	cacheExp   time.Time
+	cacheMutex sync.RWMutex
 }
 
-// NewNginxAdapter creates a new NginxAdapter for the given LoadBalancerConfig.
 func NewNginxAdapter(cfg config.NginxConfig, logger logging.Logger) (*NginxAdapter, error) {
-	// Validate that the configuration type is "nginx"
 	if cfg.GetType() != "nginx" {
 		return nil, fmt.Errorf("invalid load balancer type: %s, expected nginx", cfg.GetType())
 	}
 
-	// Initialize NGINX clients based on the provided addresses
 	clients, err := NewNginxClientSet(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create clients for nginx addresses %s: %w", cfg.Name, err)
 	}
 
-	// Initialize semaphore with the configured request pool size
 	sem := semaphore.NewWeighted(int64(cfg.GetRequestPoolSize()))
 
-	// Return a new NginxAdapter instance
 	return &NginxAdapter{
 		clients:   clients,
 		config:    cfg,
 		logger:    logger,
 		semaphore: sem,
+		cache:     make(map[string]map[string][]model.Backend),
 	}, nil
 }
 
-// ListBackends retrieves the current backends for a given upstream from all NGINX addresses.
-// It uses goroutines for concurrent requests and a semaphore to limit concurrency.
-// Returns a map of backends keyed by client baseURL, or an error if any request fails.
-func (a *NginxAdapter) ListBackends(ctx context.Context, upstreamName string) (map[string][]model.Backend, error) {
-	// Initialize shared data structures
-	clientBackends := make(map[string][]model.Backend)
-	var mu sync.Mutex            // Mutex to protect shared map and errors
-	var errors *multierror.Error // Accumulate errors from all goroutines
-	var wg sync.WaitGroup        // WaitGroup to synchronize goroutines
+// واکشی Bulk کل آپ‌استریم‌ها و ذخیره در کش با TTL دو ثانیه‌ای
+func (a *NginxAdapter) refreshCache(ctx context.Context, client *NginxClient) (map[string][]model.Backend, error) {
+	a.cacheMutex.RLock()
+	if time.Now().Before(a.cacheExp) && a.cache[client.baseURL] != nil {
+		defer a.cacheMutex.RUnlock()
+		return a.cache[client.baseURL], nil
+	}
+	a.cacheMutex.RUnlock()
 
-	// Launch a goroutine for each client
-	for _, client := range a.clients {
-		wg.Add(1)
-		go func(client *NginxClient) {
-			defer wg.Done()
-
-			// Acquire a semaphore slot to limit concurrent requests
-			if err := a.semaphore.Acquire(ctx, 1); err != nil {
-				// Lock mutex to safely append error
-				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to acquire semaphore: %w", client.baseURL, err))
-				mu.Unlock()
-				a.logger.Error("Failed to acquire semaphore",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "error", Value: err})
-				return
-			}
-			defer a.semaphore.Release(1) // Release semaphore slot after completion
-
-			// Fetch current backends for the upstream
-			currentBackends, err := a.getCurrentBackends(ctx, client, upstreamName)
-			if err != nil {
-				// Lock mutex to safely append error
-				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to parse backends for upstream %s: %w", client.baseURL, upstreamName, err))
-				mu.Unlock()
-				a.logger.Error("Failed to parse backends",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "upstream", Value: upstreamName},
-					logging.Field{Key: "error", Value: err})
-				return
-			}
-
-			// Lock mutex to safely update shared map
-			mu.Lock()
-			clientBackends[client.baseURL] = currentBackends
-			mu.Unlock()
-			a.logger.Info("Retrieved backends",
-				logging.Field{Key: "client", Value: client.baseURL},
-				logging.Field{Key: "upstream", Value: upstreamName},
-				logging.Field{Key: "backends", Value: len(currentBackends)})
-		}(client)
+	// استفاده از ListAPI تعریف شده در کانفیگ به جای Hardcode
+	path := strings.TrimPrefix(a.config.ListAPI, "/")
+	body, err := client.doRequest(ctx, "GET", path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to bulk fetch upstreams: %w", err)
 	}
 
-	// Wait for all goroutines to complete
-	wg.Wait()
+	parsedState := parseBulkNginxBackends(string(body))
 
-	// Return accumulated errors and the collected backends
-	return clientBackends, errors.ErrorOrNil()
+	a.cacheMutex.Lock()
+	a.cache[client.baseURL] = parsedState
+	a.cacheExp = time.Now().Add(2 * time.Second)
+	a.cacheMutex.Unlock()
+
+	return parsedState, nil
 }
 
-// AddBackend adds a new backend to the specified upstream for all NGINX addresses or updates its weight.
-// It uses goroutines for concurrent requests and a semaphore to limit concurrency.
-// Returns an error if any request fails.
-func (a *NginxAdapter) AddBackend(ctx context.Context, upstreamName string, backend model.Backend) error {
-	var errors *multierror.Error // Accumulate errors from all goroutines
-	var mu sync.Mutex            // Mutex to protect shared errors
-	var wg sync.WaitGroup        // WaitGroup to synchronize goroutines
-
-	// Launch a goroutine for each client
-	for _, client := range a.clients {
-		wg.Add(1)
-		go func(client *NginxClient) {
-			defer wg.Done()
-
-			// Acquire a semaphore slot to limit concurrent requests
-			if err := a.semaphore.Acquire(ctx, 1); err != nil {
-				// Lock mutex to safely append error
-				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to acquire semaphore: %w", client.baseURL, err))
-				mu.Unlock()
-				a.logger.Error("Failed to acquire semaphore",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "error", Value: err})
-				return
-			}
-			defer a.semaphore.Release(1) // Release semaphore slot after completion
-
-			// Fetch current backends to determine if the backend exists
-			currentBackends, err := a.getCurrentBackends(ctx, client, upstreamName)
-			if err != nil {
-				// Lock mutex to safely append error
-				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to parse backends for upstream %s: %w", client.baseURL, upstreamName, err))
-				mu.Unlock()
-				a.logger.Error("Failed to parse backends",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "upstream", Value: upstreamName},
-					logging.Field{Key: "error", Value: err})
-				return
-			}
-
-			// Check if backend exists and determine new weight
-			weight := -1
-			for _, b := range currentBackends {
-				if b.IP == backend.IP && b.Port == backend.Port {
-					weight = b.Weight + 1
-					break
-				}
-			}
-
-			// Construct request path based on whether backend exists
-			path := ""
-			if weight == -1 {
-				// Add new backend with weight=1
-				path = fmt.Sprintf("dynamic?upstream=%s&add=&server=%s:%d&weight=1", url.QueryEscape(upstreamName), url.QueryEscape(backend.IP), backend.Port)
-			} else {
-				// Update existing backend with incremented weight
-				path = fmt.Sprintf("dynamic?upstream=%s&server=%s:%d&weight=%d", url.QueryEscape(upstreamName), url.QueryEscape(backend.IP), backend.Port, weight)
-			}
-
-			// Execute the request
-			_, err = client.doRequest(ctx, "GET", path)
-			if err != nil {
-				// Lock mutex to safely append error
-				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to add/update backend %s:%d (weight=%d) to upstream %s: %w", client.baseURL, backend.IP, backend.Port, weight, upstreamName, err))
-				mu.Unlock()
-				a.logger.Error("Failed to add/update backend",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "upstream", Value: upstreamName},
-					logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
-					logging.Field{Key: "error", Value: err})
-			} else {
-				a.logger.Info("Backend added/updated",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "upstream", Value: upstreamName},
-					logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
-					logging.Field{Key: "weight", Value: weight})
-			}
-		}(client)
-	}
-
-	// Wait for all goroutines to complete
-	wg.Wait()
-	return errors.ErrorOrNil()
+func (a *NginxAdapter) invalidateCache(clientBaseURL string) {
+	a.cacheMutex.Lock()
+	delete(a.cache, clientBaseURL)
+	a.cacheMutex.Unlock()
 }
 
-// RemoveBackend removes a backend from the specified upstream for all NGINX addresses or decreases its weight.
-// It uses goroutines for concurrent requests and a semaphore to limit concurrency.
-// Returns an error if any request fails.
-func (a *NginxAdapter) RemoveBackend(ctx context.Context, upstreamName string, backend model.Backend) error {
-	var errors *multierror.Error // Accumulate errors from all goroutines
-	var mu sync.Mutex            // Mutex to protect shared errors
-	var wg sync.WaitGroup        // WaitGroup to synchronize goroutines
-
-	// Launch a goroutine for each client
-	for _, client := range a.clients {
-		wg.Add(1)
-		go func(client *NginxClient) {
-			defer wg.Done()
-
-			// Acquire a semaphore slot to limit concurrent requests
-			if err := a.semaphore.Acquire(ctx, 1); err != nil {
-				// Lock mutex to safely append error
-				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to acquire semaphore: %w", client.baseURL, err))
-				mu.Unlock()
-				a.logger.Error("Failed to acquire semaphore",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "error", Value: err})
-				return
-			}
-			defer a.semaphore.Release(1) // Release semaphore slot after completion
-
-			// Fetch current backends to find the backend
-			currentBackends, err := a.getCurrentBackends(ctx, client, upstreamName)
-			if err != nil {
-				// Lock mutex to safely append error
-				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to parse backends for upstream %s: %w", client.baseURL, upstreamName, err))
-				mu.Unlock()
-				a.logger.Error("Failed to parse backends",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "upstream", Value: upstreamName},
-					logging.Field{Key: "error", Value: err})
-				return
-			}
-
-			// Check if backend exists and get its weight
-			weight := -1
-			for _, b := range currentBackends {
-				if b.IP == backend.IP && b.Port == backend.Port {
-					weight = b.Weight
-					break
-				}
-			}
-
-			// If backend not found, append error
-			if weight == -1 {
-				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("backend %s:%d not found in upstream %s", backend.IP, backend.Port, upstreamName))
-				mu.Unlock()
-				a.logger.Warn("Backend not found",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "upstream", Value: upstreamName},
-					logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)})
-				return
-			}
-
-			// Construct request path based on weight
-			path := ""
-			if weight < 2 {
-				// Remove backend completely if weight is 1
-				path = fmt.Sprintf("dynamic?upstream=%s&remove=&server=%s:%d", url.QueryEscape(upstreamName), url.QueryEscape(backend.IP), backend.Port)
-			} else {
-				// Decrease weight by 1
-				weight = weight - 1
-				path = fmt.Sprintf("dynamic?upstream=%s&server=%s:%d&weight=%d", url.QueryEscape(upstreamName), url.QueryEscape(backend.IP), backend.Port, weight)
-			}
-
-			// Execute the request
-			_, err = client.doRequest(ctx, "GET", path)
-			if err != nil {
-				// Lock mutex to safely append error
-				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to remove/update backend %s:%d (weight=%d) from upstream %s: %w", client.baseURL, backend.IP, backend.Port, weight, upstreamName, err))
-				mu.Unlock()
-				a.logger.Error("Failed to remove/update backend",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "upstream", Value: upstreamName},
-					logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
-					logging.Field{Key: "error", Value: err})
-			} else {
-				a.logger.Info("Backend removed/updated",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "upstream", Value: upstreamName},
-					logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
-					logging.Field{Key: "weight", Value: weight})
-			}
-		}(client)
-	}
-
-	// Wait for all goroutines to complete
-	wg.Wait()
-	return errors.ErrorOrNil()
-}
-
-// SyncUpstream ensures the upstream matches the desired state for all NGINX addresses (idempotent).
-// It adds, updates, or removes backends as needed using goroutines and a semaphore for concurrency control.
-// Returns an error if any request fails.
 func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream) error {
-	// Create a map of desired backends with aggregated weights
 	desiredBackend := make(map[string]model.Backend)
 	for _, db := range upstream.Backends {
 		key := fmt.Sprintf("%s:%d", db.IP, db.Port)
 		if tmpdb, exists := desiredBackend[key]; exists {
-			// Increment weight for duplicate backends
-			tmpdb.Weight = tmpdb.Weight + 1
+			tmpdb.Weight += 1
 			desiredBackend[key] = tmpdb
 		} else {
-			// Initialize new backend with weight=1
 			if db.Weight < 1 {
 				db.Weight = 1
 			}
@@ -320,200 +99,181 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 		}
 	}
 
-	var errors *multierror.Error // Accumulate errors from all goroutines
-	var mu sync.Mutex            // Mutex to protect shared errors
-	var wg sync.WaitGroup        // WaitGroup to synchronize goroutines
+	var errors *multierror.Error
+	var mu sync.Mutex
+	var wg sync.WaitGroup
 
-	// Launch a goroutine for each client
 	for _, client := range a.clients {
 		wg.Add(1)
-		go func(client *NginxClient) {
+		go func(c *NginxClient) {
 			defer wg.Done()
 
-			// Acquire a semaphore slot to limit concurrent requests
 			if err := a.semaphore.Acquire(ctx, 1); err != nil {
-				// Lock mutex to safely append error
 				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to acquire semaphore: %w", client.baseURL, err))
+				errors = multierror.Append(errors, fmt.Errorf("client %s semaphore error: %w", c.baseURL, err))
 				mu.Unlock()
-				a.logger.Error("Failed to acquire semaphore",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "error", Value: err})
 				return
 			}
-			defer a.semaphore.Release(1) // Release semaphore slot after completion
+			defer a.semaphore.Release(1)
 
-			// Fetch current backends
-			currentBackends, err := a.getCurrentBackends(ctx, client, upstream.Name)
+			allBackends, err := a.refreshCache(ctx, c)
 			if err != nil {
-				// Lock mutex to safely append error
 				mu.Lock()
-				errors = multierror.Append(errors, fmt.Errorf("client %s: failed to parse backends for upstream %s: %w", client.baseURL, upstream.Name, err))
+				errors = multierror.Append(errors, err)
 				mu.Unlock()
-				a.logger.Error("Failed to parse backends",
-					logging.Field{Key: "client", Value: client.baseURL},
-					logging.Field{Key: "upstream", Value: upstream.Name},
-					logging.Field{Key: "error", Value: err})
 				return
 			}
+			currentBackends := allBackends[upstream.Name]
 
-			// Determine which backends to add, update, or remove
 			updateBackends := make(map[string]model.Backend)
 			removeBackends := make(map[string]model.Backend)
+			changed := false
 
-			// Compare desired and current backends
 			for key, db := range desiredBackend {
+				matched := false
 				for _, cb := range currentBackends {
 					if db.IP == cb.IP && db.Port == cb.Port {
-						if cb.Weight == db.Weight {
-							// No change needed, mark as processed
-							db.Weight = -1
-							desiredBackend[key] = db
-						} else {
-							// Weight differs, mark for update
-							updateBackends[fmt.Sprintf("%s:%d", db.IP, db.Port)] = db
-							db.Weight = -1
-							desiredBackend[key] = db
+						matched = true
+						if cb.Weight != db.Weight {
+							updateBackends[key] = db
+							changed = true
+						}
+						break
+					}
+				}
+				if !matched {
+					updateBackends[key] = db
+					changed = true
+				}
+			}
+
+			for _, cb := range currentBackends {
+				if _, exists := desiredBackend[fmt.Sprintf("%s:%d", cb.IP, cb.Port)]; !exists {
+					removeBackends[fmt.Sprintf("%s:%d", cb.IP, cb.Port)] = cb
+					changed = true
+				}
+			}
+
+			// Add/Update
+			for _, backend := range updateBackends {
+				path := fmt.Sprintf("%s?upstream=%s&server=%s:%d&weight=%d",
+					strings.TrimPrefix(a.config.AddAPI, "/"),
+					url.QueryEscape(upstream.Name),
+					url.QueryEscape(backend.IP),
+					backend.Port,
+					backend.Weight)
+				
+				if _, err := c.doRequest(ctx, "GET", path); err != nil {
+					mu.Lock()
+					errors = multierror.Append(errors, fmt.Errorf("client %s add failed: %w", c.baseURL, err))
+					mu.Unlock()
+				}
+			}
+
+			// Remove
+			for _, backend := range removeBackends {
+				path := fmt.Sprintf("%s?upstream=%s&server=%s:%d",
+					strings.TrimPrefix(a.config.RemoveAPI, "/"),
+					url.QueryEscape(upstream.Name),
+					url.QueryEscape(backend.IP),
+					backend.Port)
+				
+				if _, err := c.doRequest(ctx, "GET", path); err != nil {
+					mu.Lock()
+					errors = multierror.Append(errors, fmt.Errorf("client %s remove failed: %w", c.baseURL, err))
+					mu.Unlock()
+				}
+			}
+
+			if changed {
+				a.invalidateCache(c.baseURL)
+			}
+		}(client)
+	}
+
+	wg.Wait()
+	return errors.ErrorOrNil()
+}
+
+// پیاده‌سازی اصلی Two-Way Reconciliation برای مقابله با State Drift
+// این متد باید توسط کنترلر در بازه‌های زمانی مشخص فراخوانی شود تا آپ‌استریم‌هایی که از K8s پاک شده‌اند، از NGINX نیز حذف شوند.
+func (a *NginxAdapter) SyncAllUpstreams(ctx context.Context, desiredUpstreams map[string]model.Upstream) error {
+	var errors *multierror.Error
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	for _, client := range a.clients {
+		wg.Add(1)
+		go func(c *NginxClient) {
+			defer wg.Done()
+			allNginxUpstreams, err := a.refreshCache(ctx, c)
+			if err != nil {
+				mu.Lock()
+				errors = multierror.Append(errors, err)
+				mu.Unlock()
+				return
+			}
+
+			// یافتن آپ‌استریم‌های یتیم (Orphaned) که در NGINX هستند اما در K8s وجود ندارند
+			for upstreamName, backends := range allNginxUpstreams {
+				if _, exists := desiredUpstreams[upstreamName]; !exists {
+					for _, backend := range backends {
+						path := fmt.Sprintf("%s?upstream=%s&server=%s:%d",
+							strings.TrimPrefix(a.config.RemoveAPI, "/"),
+							url.QueryEscape(upstreamName),
+							url.QueryEscape(backend.IP),
+							backend.Port)
+						
+						if _, err := c.doRequest(ctx, "GET", path); err != nil {
+							a.logger.Error("Failed to remove orphaned backend", logging.Field{Key: "error", Value: err})
 						}
 					}
-				}
-			}
-
-			// Identify backends to remove (present in current but not in desired)
-			for _, cb := range currentBackends {
-				if _, addexists := desiredBackend[fmt.Sprintf("%s:%d", cb.IP, cb.Port)]; !addexists {
-					removeBackends[fmt.Sprintf("%s:%d", cb.IP, cb.Port)] = cb
-				}
-			}
-
-			// Add new backends
-			for _, backend := range desiredBackend {
-				if backend.Weight != -1 {
-					path := fmt.Sprintf("dynamic?upstream=%s&add=&server=%s:%d&weight=%d", url.QueryEscape(upstream.Name), url.QueryEscape(backend.IP), backend.Port, backend.Weight)
-					_, err = client.doRequest(ctx, "GET", path)
-					if err != nil {
-						// Lock mutex to safely append error
-						mu.Lock()
-						errors = multierror.Append(errors, fmt.Errorf("client %s: failed to add backend %s:%d (weight=%d) from upstream %s: %w", client.baseURL, backend.IP, backend.Port, backend.Weight, upstream.Name, err))
-						mu.Unlock()
-						a.logger.Error("Failed to add backend",
-							logging.Field{Key: "client", Value: client.baseURL},
-							logging.Field{Key: "upstream", Value: upstream.Name},
-							logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
-							logging.Field{Key: "error", Value: err})
-					} else {
-						a.logger.Info("Backend added",
-							logging.Field{Key: "client", Value: client.baseURL},
-							logging.Field{Key: "upstream", Value: upstream.Name},
-							logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
-							logging.Field{Key: "weight", Value: backend.Weight})
-					}
-				}
-			}
-
-			// Update existing backends
-			for _, backend := range updateBackends {
-				path := fmt.Sprintf("dynamic?upstream=%s&server=%s:%d&weight=%d", url.QueryEscape(upstream.Name), url.QueryEscape(backend.IP), backend.Port, backend.Weight)
-				_, err = client.doRequest(ctx, "GET", path)
-				if err != nil {
-					// Lock mutex to safely append error
-					mu.Lock()
-					errors = multierror.Append(errors, fmt.Errorf("client %s: failed to update backend %s:%d (weight=%d) from upstream %s: %w", client.baseURL, backend.IP, backend.Port, backend.Weight, upstream.Name, err))
-					mu.Unlock()
-					a.logger.Error("Failed to update backend",
-						logging.Field{Key: "client", Value: client.baseURL},
-						logging.Field{Key: "upstream", Value: upstream.Name},
-						logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
-						logging.Field{Key: "error", Value: err})
-				} else {
-					a.logger.Info("Backend updated",
-						logging.Field{Key: "client", Value: client.baseURL},
-						logging.Field{Key: "upstream", Value: upstream.Name},
-						logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
-						logging.Field{Key: "weight", Value: backend.Weight})
-				}
-			}
-
-			// Remove backends
-			for _, backend := range removeBackends {
-				path := fmt.Sprintf("dynamic?upstream=%s&remove=&server=%s:%d&weight=%d", url.QueryEscape(upstream.Name), url.QueryEscape(backend.IP), backend.Port, backend.Weight)
-				_, err = client.doRequest(ctx, "GET", path)
-				if err != nil {
-					// Lock mutex to safely append error
-					mu.Lock()
-					errors = multierror.Append(errors, fmt.Errorf("client %s: failed to remove backend %s:%d from upstream %s: %w", client.baseURL, backend.IP, backend.Port, upstream.Name, err))
-					mu.Unlock()
-					a.logger.Error("Failed to remove backend",
-						logging.Field{Key: "client", Value: client.baseURL},
-						logging.Field{Key: "upstream", Value: upstream.Name},
-						logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)},
-						logging.Field{Key: "error", Value: err})
-				} else {
-					a.logger.Info("Backend removed",
-						logging.Field{Key: "client", Value: client.baseURL},
-						logging.Field{Key: "upstream", Value: upstream.Name},
-						logging.Field{Key: "backend", Value: fmt.Sprintf("%s:%d", backend.IP, backend.Port)})
+					a.invalidateCache(c.baseURL)
 				}
 			}
 		}(client)
 	}
 
-	// Wait for all goroutines to complete
 	wg.Wait()
 	return errors.ErrorOrNil()
 }
 
-// parseNginxBackends parses NGINX response text into a list of Backends.
-// It uses a regex to extract backend details (IP, port, weight) from the response.
-func parseNginxBackends(response string) ([]model.Backend, error) {
-	var backends []model.Backend
-	// Regex to match server lines with IP, port, weight, and optional parameters
-	// re := regexp.MustCompile(`server\s+([\d.]+):(\d+)(?:\s+weight=(\d+))?.*?;`) // ipv4
-	re := regexp.MustCompile(`server\s+([0-9a-fA-F.:\[\]]+):(\d+)(?:\s+weight=(\d+))?.*?;`) // ipv4,ipv6
-
-	// Split response into lines
+// پارس کردن خروجی متنی Bulk NGINX و نگاشت آن به ساختار Map
+func parseBulkNginxBackends(response string) map[string][]model.Backend {
+	result := make(map[string][]model.Backend)
 	lines := strings.Split(response, "\n")
+	var currentUpstream string
+
+	reServer := regexp.MustCompile(`server\s+([0-9a-fA-F.:\[\]]+):(\d+)(?:\s+weight=(\d+))?`)
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
-			continue // Skip empty lines
-		}
-		matches := re.FindStringSubmatch(line)
-		if len(matches) < 4 {
-			return nil, fmt.Errorf("invalid backend format: %s", line)
+			continue
 		}
 
-		// Extract IP, port, and weight
-		ip := matches[1]
-		portStr := matches[2]
-		weightStr := matches[3]
-		var port, weight int
-		if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
-			return nil, fmt.Errorf("invalid port in backend %s: %w", line, err)
+		if strings.HasPrefix(line, "server ") {
+			if currentUpstream == "" {
+				continue
+			}
+			matches := reServer.FindStringSubmatch(line)
+			if len(matches) >= 3 {
+				ip := matches[1]
+				port, _ := strconv.Atoi(matches[2])
+				weight := 1
+				if len(matches) >= 4 && matches[3] != "" {
+					weight, _ = strconv.Atoi(matches[3])
+				}
+				result[currentUpstream] = append(result[currentUpstream], model.Backend{
+					IP:     ip,
+					Port:   int32(port),
+					Weight: weight,
+				})
+			}
+		} else {
+			// تشخیص نام آپ‌استریم جدید
+			currentUpstream = strings.TrimSuffix(line, ":") 
 		}
-		if _, err := fmt.Sscanf(weightStr, "%d", &weight); err != nil {
-			return nil, fmt.Errorf("invalid weight in backend %s: %w", line, err)
-		}
-
-		// Append parsed backend to the list
-		backends = append(backends, model.Backend{
-			IP:     ip,
-			Port:   int32(port),
-			Weight: weight,
-		})
 	}
-
-	return backends, nil
-}
-
-// getCurrentBackends retrieves the current backends for a given upstream from a single NGINX client.
-// It sends a request to the NGINX API and parses the response using parseNginxBackends.
-func (a *NginxAdapter) getCurrentBackends(ctx context.Context, client *NginxClient, upstreamName string) ([]model.Backend, error) {
-	// Construct the request path for listing backends
-	path := fmt.Sprintf("dynamic?upstream=%s&verbose=", url.QueryEscape(upstreamName))
-	body, err := client.doRequest(ctx, "GET", path)
-	if err != nil {
-		return nil, fmt.Errorf("client %s: failed to parse backends for upstream %s: %w", client.baseURL, upstreamName, err)
-	}
-	return parseNginxBackends(string(body))
+	return result
 }

@@ -1,45 +1,31 @@
-# Use official Go image as base
+# Stage 1: Builder
 FROM golang:1.24.7-alpine AS builder
 
-# Set working directory
 WORKDIR /app
-
-# Copy go mod and sum files
 COPY go.mod go.sum ./
-
-# Download dependencies
 RUN go mod download
 
-# Copy source code
 COPY . .
+# بهینه‌سازی دقیق‌تر کامپایل: تگ netgo برای جلوگیری از وابستگی به glibc در رزولوشن DNS
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+    -tags netgo \
+    -ldflags="-s -w -extldflags '-static'" \
+    -o mlb-controller ./cmd/mlb-controller
 
-# Build the binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -a -installsuffix cgo -o mlb-controller ./cmd/mlb-controller
+# Stage 2: Final Minimal Image
+FROM gcr.io/distroless/static:nonroot
 
-# Use a minimal alpine image for the final stage
-FROM alpine:3.22.1
+WORKDIR /
 
-# Install ca-certificates for HTTPS requests
-RUN apk --no-cache add ca-certificates
+# کپی باینری از مرحله قبل
+COPY --from=builder /app/mlb-controller /mlb-controller
 
-# Set working directory
-WORKDIR /app
+# کپی فایل‌های کانفیگ با دسترسی nonroot (UID 65532 در Distroless)
+COPY --from=builder --chown=65532:65532 /app/configs /configs
 
-# Copy the binary from builder
-COPY --from=builder /app/mlb-controller .
+ENV CONFIG_PATH=/configs/config.yaml
 
-# Copy configuration files
-COPY configs /app/configs
+EXPOSE 8080 9090
 
-# Set environment variables
-ENV CONFIG_PATH=/app/configs/config.yaml
-
-# Expose any necessary ports (modify as needed)
-EXPOSE 8080
-
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-USER appuser
-
-# Command to run the binary
-CMD ["./mlb-controller"]
-
+# اجرای مستقیم بدون shell
+CMD ["/mlb-controller"]

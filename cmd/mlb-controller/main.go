@@ -1,10 +1,11 @@
-// cmd/mlb-controller/main.go
 package main
 
 import (
 	"context"
 	"flag"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"mlb-controller/internal/adapters/logging"
@@ -13,34 +14,43 @@ import (
 )
 
 func main() {
-	// Parse command-line arguments
 	configPath := flag.String("config", "/etc/mlb-controller/config.yaml", "path to configuration file")
 	flag.Parse()
 
-	// Initialize dependencies
+	// ایجاد Context متصل به سیگنال‌های سیستم‌عامل برای Graceful Shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	container, err := di.NewContainer(*configPath)
 	if err != nil {
-		// Use a temporary logger if container failed
-		tempLogger, _ := logging.New(logging.LogConfig{Level: "info", Format: "json"}) // Ignore err for simplicity
-		tempLogger.Error("Failed to initialize container", logging_ports.Field{Key: "error", Value: err})
-		tempLogger.Sync()
+		tempLogger, _ := logging.New(logging.LogConfig{Level: "info", Format: "json"})
+		if tempLogger != nil {
+			tempLogger.Fatal("Failed to initialize DI container", logging_ports.Field{Key: "error", Value: err})
+		}
 		os.Exit(1)
 	}
 
-	// This defer block now handles graceful shutdown with a timeout.
-	// It creates a new context with a 5-second timeout for the Stop function.
+	// مدیریت چرخه حیات (Lifecycle Management) و پاکسازی منابع با Timeout قطعی
 	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
+		
+		container.Logger.Info("Initiating graceful shutdown sequence...")
 		if stopErr := container.App.Stop(shutdownCtx); stopErr != nil {
 			container.Logger.Error("Failed to stop app gracefully", logging_ports.Field{Key: "error", Value: stopErr})
+		} else {
+			container.Logger.Info("Application stopped successfully")
 		}
+		
+		container.Logger.Sync()
 	}()
 
-	// Start application
-	ctx := context.Background()
+	container.Logger.Info("Starting mlb-controller...")
+	
+	// پاس دادن Context کنترل‌شده با سیگنال به متد Start
+	// با دریافت SIGTERM از سمت Kubelet، این Context کنسل شده و روتین‌های داخلی متوقف می‌شوند
 	if err := container.App.Start(ctx); err != nil {
-		container.Logger.Error("Application failed", logging_ports.Field{Key: "error", Value: err})
+		container.Logger.Error("Application exited with error", logging_ports.Field{Key: "error", Value: err})
 		os.Exit(1)
 	}
 }

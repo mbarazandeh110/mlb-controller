@@ -7,6 +7,9 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/workqueue"
+
 	"mlb-controller/internal/domain/config"
 	"mlb-controller/internal/domain/model"
 	"mlb-controller/internal/ports/kubernetes"
@@ -16,12 +19,11 @@ import (
 	"mlb-controller/internal/util"
 )
 
-// ControllerImpl implements the controller.Controller interface.
 type ControllerImpl struct {
 	k8sClient       kubernetes.KubernetesPort
 	logger          logging.Logger
 	metrics         metrics.Metrics
-	loadBalancers   map[string]loadbalancer.LoadBalancerAdapter // Key: loadbalancer name
+	loadBalancers   map[string]loadbalancer.LoadBalancerAdapter
 	config          *config.Config
 	state           model.ControllerState
 	stateMutex      sync.RWMutex
@@ -31,9 +33,9 @@ type ControllerImpl struct {
 	syncTicker      *time.Ticker
 	syncStop        chan struct{}
 	syncUpstreamCtr metrics.Counter
+	queue           workqueue.RateLimitingInterface
 }
 
-// NewController creates a new ControllerImpl instance.
 func NewController(
 	k8sClient kubernetes.KubernetesPort,
 	logger logging.Logger,
@@ -53,49 +55,44 @@ func NewController(
 			Nodes:     make(map[string]model.Node),
 			Upstreams: make(map[string]model.Upstream),
 		},
-		serviceEvents:   make(chan kubernetes.ServiceEvent, 100), // Buffered to prevent missing events
-		podEvents:       make(chan kubernetes.PodEvent, 100),
-		nodeEvents:      make(chan kubernetes.NodeEvent, 100),
+		serviceEvents:   make(chan kubernetes.ServiceEvent, 500),
+		podEvents:       make(chan kubernetes.PodEvent, 2000),
+		nodeEvents:      make(chan kubernetes.NodeEvent, 500),
 		syncStop:        make(chan struct{}),
 		syncUpstreamCtr: metrics.NewCounter("sync_upstreams_total", "Total number of upstream sync operations", nil),
+		queue:           workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "mlb_sync_queue"),
 	}
 }
 
-// Start initializes the controller and begins monitoring Kubernetes resources.
 func (c *ControllerImpl) Start(ctx context.Context) error {
-	c.logger.Info("Starting controller")
+	c.logger.Info("Starting controller with Two-Way Reconciliation Engine")
 
-	// Start watching Kubernetes resources
 	go func() {
 		if err := c.k8sClient.WatchServices(ctx, nil, c.serviceEvents); err != nil {
 			c.logger.Error("Failed to watch services", logging.Field{Key: "error", Value: err})
-			c.metrics.IncrementSyncErrors("watch_services")
 		}
 	}()
 	go func() {
 		if err := c.k8sClient.WatchPods(ctx, c.podEvents); err != nil {
 			c.logger.Error("Failed to watch pods", logging.Field{Key: "error", Value: err})
-			c.metrics.IncrementSyncErrors("watch_pods")
 		}
 	}()
 	go func() {
 		if err := c.k8sClient.WatchNodes(ctx, c.nodeEvents); err != nil {
 			c.logger.Error("Failed to watch nodes", logging.Field{Key: "error", Value: err})
-			c.metrics.IncrementSyncErrors("watch_nodes")
 		}
 	}()
 
-	// Start periodic sync (requirement 7)
+	for i := 0; i < c.config.RequestPoolSize; i++ {
+		go wait.UntilWithContext(ctx, c.runWorker, time.Second)
+	}
+
 	c.syncTicker = time.NewTicker(c.config.GlobalUpstreamSyncPeriod)
 	go c.runPeriodicSync(ctx)
-
-	// Process events
 	go c.processEvents(ctx)
 
-	// Initial sync on start (requirement 11)
 	if err := c.SyncUpstreams(ctx); err != nil {
-		c.logger.Error("Initial upstream sync failed", logging.Field{Key: "error", Value: err})
-		return err
+		c.logger.Error("Initial bulk upstream sync failed", logging.Field{Key: "error", Value: err})
 	}
 
 	<-ctx.Done()
@@ -104,15 +101,55 @@ func (c *ControllerImpl) Start(ctx context.Context) error {
 	return ctx.Err()
 }
 
-// stop cleans up resources.
 func (c *ControllerImpl) stop() {
 	if c.syncTicker != nil {
 		c.syncTicker.Stop()
 	}
 	close(c.syncStop)
+	c.queue.ShutDown()
 }
 
-// processEvents handles incoming Kubernetes events.
+func (c *ControllerImpl) runWorker(ctx context.Context) {
+	for c.processNextItem(ctx) {
+	}
+}
+
+func (c *ControllerImpl) processNextItem(ctx context.Context) bool {
+	obj, quit := c.queue.Get()
+	if quit {
+		return false
+	}
+	defer c.queue.Done(obj)
+
+	key, ok := obj.(string)
+	if !ok {
+		c.queue.Forget(obj)
+		return true
+	}
+
+	err := c.syncHandler(ctx, key)
+	if err == nil {
+		c.queue.Forget(obj)
+		return true
+	}
+
+	c.logger.Error("Error syncing upstream, backing off", logging.Field{Key: "key", Value: key}, logging.Field{Key: "error", Value: err})
+	c.queue.AddRateLimited(obj)
+	return true
+}
+
+func (c *ControllerImpl) syncHandler(ctx context.Context, key string) error {
+	c.stateMutex.RLock()
+	svc, exists := c.state.Services[key]
+	c.stateMutex.RUnlock()
+
+	if !exists {
+		return nil
+	}
+
+	return c.syncUpstreamsForService(ctx, svc)
+}
+
 func (c *ControllerImpl) processEvents(ctx context.Context) {
 	for {
 		select {
@@ -128,71 +165,79 @@ func (c *ControllerImpl) processEvents(ctx context.Context) {
 	}
 }
 
-// handleServiceEvent processes Kubernetes Service events.
 func (c *ControllerImpl) handleServiceEvent(event kubernetes.ServiceEvent) {
 	key := fmt.Sprintf("%s/%s", event.Service.Namespace, event.Service.Name)
 	c.stateMutex.Lock()
-	defer c.stateMutex.Unlock()
-
 	switch event.Type {
 	case kubernetes.EventTypeAdd, kubernetes.EventTypeUpdate:
 		c.state.Services[key] = event.Service
-		c.logger.Info("Service updated in state", logging.Field{Key: "service", Value: key})
 	case kubernetes.EventTypeDelete:
 		delete(c.state.Services, key)
-		c.logger.Info("Service removed from state", logging.Field{Key: "service", Value: key})
 	}
+	c.stateMutex.Unlock()
 
-	// Trigger upstream sync after service change (requirement 4)
-	if err := c.syncUpstreamsForService(context.Background(), event.Service); err != nil {
-		c.logger.Error("Failed to sync upstreams for service", logging.Field{Key: "service", Value: key}, logging.Field{Key: "error", Value: err})
-	}
+	c.queue.Add(key)
 }
 
-// handlePodEvent processes Kubernetes Pod events (requirement 3).
 func (c *ControllerImpl) handlePodEvent(event kubernetes.PodEvent) {
 	key := fmt.Sprintf("%s/%s", event.Pod.Namespace, event.Pod.Name)
 	c.stateMutex.Lock()
-	defer c.stateMutex.Unlock()
-
 	switch event.Type {
 	case kubernetes.EventTypeAdd, kubernetes.EventTypeUpdate:
 		c.state.Pods[key] = event.Pod
-		c.logger.Info("Pod updated in state", logging.Field{Key: "pod", Value: key}, logging.Field{Key: "ready", Value: event.Pod.Ready})
 	case kubernetes.EventTypeDelete:
 		delete(c.state.Pods, key)
-		c.logger.Info("Pod removed from state", logging.Field{Key: "pod", Value: key})
 	}
+	c.stateMutex.Unlock()
 
-	// Trigger upstream sync for affected services (requirement 4)
-	c.syncUpstreamsForPod(event.Pod)
+	c.enqueueUpstreamsForPod(event.Pod)
 }
 
-// handleNodeEvent processes Kubernetes Node events.
 func (c *ControllerImpl) handleNodeEvent(event kubernetes.NodeEvent) {
 	c.stateMutex.Lock()
-	defer c.stateMutex.Unlock()
-
 	switch event.Type {
 	case kubernetes.EventTypeAdd, kubernetes.EventTypeUpdate:
 		c.state.Nodes[event.Node.Name] = event.Node
-		c.logger.Info("Node updated in state", logging.Field{Key: "node", Value: event.Node.Name})
 	case kubernetes.EventTypeDelete:
 		delete(c.state.Nodes, event.Node.Name)
-		c.logger.Info("Node removed from state", logging.Field{Key: "node", Value: event.Node.Name})
 	}
+	c.stateMutex.Unlock()
 
-	// Trigger upstream sync for affected pods (requirement 2)
-	c.syncUpstreamsForNode(event.Node)
+	c.enqueueUpstreamsForNode(event.Node)
 }
 
-// syncUpstreamsForService syncs upstreams for a specific service.
+func (c *ControllerImpl) enqueueUpstreamsForPod(pod model.Pod) {
+	c.stateMutex.RLock()
+	defer c.stateMutex.RUnlock()
+	for _, svc := range c.state.Services {
+		if c.matchLabels(pod.Labels, svc.Selector) {
+			c.queue.Add(fmt.Sprintf("%s/%s", svc.Namespace, svc.Name))
+		}
+	}
+}
+
+func (c *ControllerImpl) enqueueUpstreamsForNode(node model.Node) {
+	c.stateMutex.RLock()
+	var affectedPods []model.Pod
+	for _, pod := range c.state.Pods {
+		if pod.NodeName == node.Name {
+			affectedPods = append(affectedPods, pod)
+		}
+	}
+	c.stateMutex.RUnlock()
+
+	for _, pod := range affectedPods {
+		c.enqueueUpstreamsForPod(pod)
+	}
+}
+
 func (c *ControllerImpl) syncUpstreamsForService(ctx context.Context, svc model.Service) error {
 	startTime := time.Now()
 	upstreamName := svc.Labels["mlb-upstream-name"]
+	lbName := svc.Labels["mlb-loadbalancer-name"]
 
-	if svc.Labels["mlb-loadbalancer-name"] == "" || upstreamName == "" {
-		return nil // Not an MLB service
+	if lbName == "" || upstreamName == "" {
+		return nil
 	}
 
 	pods, err := c.k8sClient.GetPodsForSelector(ctx, svc.Namespace, svc.Selector)
@@ -204,13 +249,13 @@ func (c *ControllerImpl) syncUpstreamsForService(ctx context.Context, svc model.
 	upstream := c.buildUpstream(svc, pods)
 	if upstream == nil {
 		c.metrics.UpdateBackendsTotal(upstreamName, 0)
-		return nil // No valid upstream (e.g., no ready pods)
+		return nil
 	}
 
-	// Update backends total metric
 	c.metrics.UpdateBackendsTotal(upstreamName, float64(len(upstream.Backends)))
 
-	key := fmt.Sprintf("%s/%s", svc.Labels["mlb-loadbalancer-name"], svc.Labels["mlb-upstream-name"])
+	key := fmt.Sprintf("%s/%s", lbName, upstreamName)
+	
 	c.stateMutex.Lock()
 	c.state.Upstreams[key] = *upstream
 	c.stateMutex.Unlock()
@@ -220,49 +265,17 @@ func (c *ControllerImpl) syncUpstreamsForService(ctx context.Context, svc model.
 		return err
 	}
 
-	// Observe sync duration
-	duration := time.Since(startTime).Seconds()
-	c.metrics.ObserveSyncDuration(upstreamName, duration)
-
+	c.metrics.ObserveSyncDuration(upstreamName, time.Since(startTime).Seconds())
 	return nil
 }
 
-// syncUpstreamsForPod syncs upstreams for services affected by a pod change.
-func (c *ControllerImpl) syncUpstreamsForPod(pod model.Pod) {
-	c.stateMutex.RLock()
-	defer c.stateMutex.RUnlock()
-
-	for _, svc := range c.state.Services {
-		if c.matchLabels(pod.Labels, svc.Selector) {
-			if err := c.syncUpstreamsForService(context.Background(), svc); err != nil {
-				c.logger.Error("Failed to sync upstreams for pod change",
-					logging.Field{Key: "pod", Value: fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)},
-					logging.Field{Key: "service", Value: fmt.Sprintf("%s/%s", svc.Namespace, svc.Name)},
-					logging.Field{Key: "error", Value: err})
-			}
-		}
-	}
-}
-
-// syncUpstreamsForNode syncs upstreams for pods running on a specific node.
-func (c *ControllerImpl) syncUpstreamsForNode(node model.Node) {
-	c.stateMutex.RLock()
-	defer c.stateMutex.RUnlock()
-
-	for _, pod := range c.state.Pods {
-		if pod.NodeName == node.Name {
-			c.syncUpstreamsForPod(pod)
-		}
-	}
-}
-
-// runPeriodicSync performs periodic upstream synchronization (requirement 7).
+// اجرای مستقیم Two-Way Reconciliation در بازه‌های زمانی ثابت
 func (c *ControllerImpl) runPeriodicSync(ctx context.Context) {
 	for {
 		select {
 		case <-c.syncTicker.C:
 			if err := c.SyncUpstreams(ctx); err != nil {
-				c.logger.Error("Periodic upstream sync failed", logging.Field{Key: "error", Value: err})
+				c.logger.Error("Periodic drift reconciliation failed", logging.Field{Key: "error", Value: err})
 			}
 		case <-c.syncStop:
 			return
@@ -272,9 +285,10 @@ func (c *ControllerImpl) runPeriodicSync(ctx context.Context) {
 	}
 }
 
-// SyncUpstreams synchronizes all upstreams for monitored services (requirements 7, 11).
+// نگاشت کامل State مطلوب K8s و ارسال به لودبالانسرها جهت حذف Stateهای Drift شده
 func (c *ControllerImpl) SyncUpstreams(ctx context.Context) error {
 	startTime := time.Now()
+
 	c.stateMutex.RLock()
 	services := make([]model.Service, 0, len(c.state.Services))
 	for _, svc := range c.state.Services {
@@ -282,30 +296,63 @@ func (c *ControllerImpl) SyncUpstreams(ctx context.Context) error {
 	}
 	c.stateMutex.RUnlock()
 
-	var errs []error
+	desiredState := make(map[string]map[string]model.Upstream)
+	for lbName := range c.loadBalancers {
+		desiredState[lbName] = make(map[string]model.Upstream)
+	}
+
 	for _, svc := range services {
-		if err := c.syncUpstreamsForService(ctx, svc); err != nil {
-			errs = append(errs, err)
+		lbName := svc.Labels["mlb-loadbalancer-name"]
+		if lbName == "" {
+			continue
+		}
+
+		pods, err := c.k8sClient.GetPodsForSelector(ctx, svc.Namespace, svc.Selector)
+		if err != nil {
+			c.logger.Error("Failed to list pods for bulk reconciliation", logging.Field{Key: "service", Value: svc.Name})
+			continue
+		}
+
+		if upstream := c.buildUpstream(svc, pods); upstream != nil {
+			if _, exists := desiredState[lbName]; !exists {
+				desiredState[lbName] = make(map[string]model.Upstream)
+			}
+			desiredState[lbName][upstream.Name] = *upstream
+		}
+	}
+
+	// بروزرسانی Cache کنترلر
+	c.stateMutex.Lock()
+	c.state.Upstreams = make(map[string]model.Upstream)
+	for lbName, upstreams := range desiredState {
+		for upName, up := range upstreams {
+			c.state.Upstreams[fmt.Sprintf("%s/%s", lbName, upName)] = up
+		}
+	}
+	c.stateMutex.Unlock()
+
+	var errs []error
+	for lbName, adapter := range c.loadBalancers {
+		if err := adapter.SyncAllUpstreams(ctx, desiredState[lbName]); err != nil {
+			errs = append(errs, fmt.Errorf("reconciliation failed for LB %s: %w", lbName, err))
 		}
 	}
 
 	c.syncUpstreamCtr.Inc()
-	// Observe sync duration for all upstreams
-	duration := time.Since(startTime).Seconds()
-	c.metrics.ObserveSyncDuration("all_upstreams", duration)
+	c.metrics.ObserveSyncDuration("two_way_reconciliation", time.Since(startTime).Seconds())
 
 	if len(errs) > 0 {
-		c.metrics.IncrementSyncErrors("all_upstreams")
-		return fmt.Errorf("errors during upstream sync: %v", errs)
+		c.metrics.IncrementSyncErrors("two_way_reconciliation")
+		return fmt.Errorf("drift reconciliation errors: %v", errs)
 	}
+	
 	return nil
 }
 
-// buildUpstream constructs an Upstream object from a service and its pods (requirements 2, 5, 14).
 func (c *ControllerImpl) buildUpstream(svc model.Service, pods []model.Pod) *model.Upstream {
 	lbName := svc.Labels["mlb-loadbalancer-name"]
 	upstreamName := svc.Labels["mlb-upstream-name"]
-	if lbName == "" || upstreamName == "" || svc.NodePort == 0 {
+	if svc.NodePort == 0 {
 		return nil
 	}
 
@@ -317,11 +364,6 @@ func (c *ControllerImpl) buildUpstream(svc model.Service, pods []model.Pod) *mod
 
 		node, err := c.k8sClient.GetNodeByName(context.Background(), pod.NodeName)
 		if err != nil {
-			c.logger.Error("Failed to get node for pod",
-				logging.Field{Key: "pod", Value: fmt.Sprintf("%s/%s", pod.Namespace, pod.Name)},
-				logging.Field{Key: "node", Value: pod.NodeName},
-				logging.Field{Key: "error", Value: err})
-			c.metrics.IncrementSyncErrors(upstreamName)
 			continue
 		}
 
@@ -330,11 +372,9 @@ func (c *ControllerImpl) buildUpstream(svc model.Service, pods []model.Pod) *mod
 			nodeIP = node.ExternalIP
 		}
 		if nodeIP == "" {
-			c.logger.Warn("No valid IP for node", logging.Field{Key: "node", Value: node.Name})
 			continue
 		}
 
-		// Apply IP replacement if enabled (requirement 14)
 		lbConfig, exists := c.getLoadBalancerConfig(lbName)
 		if exists && lbConfig.GetIPReplacement() {
 			nodeIP = util.ApplyIPReplacement(nodeIP, lbConfig, c.config.GlobalIPReplacementList)
@@ -343,7 +383,7 @@ func (c *ControllerImpl) buildUpstream(svc model.Service, pods []model.Pod) *mod
 		backends = append(backends, model.Backend{
 			IP:     nodeIP,
 			Port:   svc.NodePort,
-			Weight: 1, // Requirement 5
+			Weight: 1,
 		})
 	}
 
@@ -351,30 +391,23 @@ func (c *ControllerImpl) buildUpstream(svc model.Service, pods []model.Pod) *mod
 		return nil
 	}
 
-	lbConfig, _ := c.getLoadBalancerConfig(lbName) // Get config for upstream
+	lbConfig, _ := c.getLoadBalancerConfig(lbName)
 	return &model.Upstream{
 		Name:         upstreamName,
 		LoadBalancer: lbName,
 		Backends:     backends,
 		Type:         c.getLoadBalancerType(lbName),
-		Config:       lbConfig, // Use the config directly
+		Config:       lbConfig,
 	}
 }
 
-// syncLoadBalancerUpstream calls the load balancer adapter to sync the upstream.
 func (c *ControllerImpl) syncLoadBalancerUpstream(ctx context.Context, upstream *model.Upstream) error {
-	if upstream == nil {
-		return nil
-	}
-
 	adapter, exists := c.loadBalancers[upstream.LoadBalancer]
 	if !exists {
-		c.metrics.IncrementSyncErrors(upstream.Name)
 		return fmt.Errorf("load balancer adapter not found: %s", upstream.LoadBalancer)
 	}
 
 	if err := adapter.SyncUpstream(ctx, *upstream); err != nil {
-		c.metrics.IncrementSyncErrors(upstream.Name)
 		return fmt.Errorf("failed to sync upstream %s/%s: %w", upstream.LoadBalancer, upstream.Name, err)
 	}
 
@@ -385,7 +418,6 @@ func (c *ControllerImpl) syncLoadBalancerUpstream(ctx context.Context, upstream 
 	return nil
 }
 
-// getLoadBalancerConfig retrieves the load balancer config by name.
 func (c *ControllerImpl) getLoadBalancerConfig(lbName string) (config.LoadBalancerConfig, bool) {
 	for _, lb := range c.config.LoadBalancers.LoadBalancers {
 		if lb.GetName() == lbName {
@@ -395,7 +427,6 @@ func (c *ControllerImpl) getLoadBalancerConfig(lbName string) (config.LoadBalanc
 	return nil, false
 }
 
-// getLoadBalancerType retrieves the load balancer type by name.
 func (c *ControllerImpl) getLoadBalancerType(lbName string) string {
 	for _, lb := range c.config.LoadBalancers.LoadBalancers {
 		if lb.GetName() == lbName {
@@ -405,8 +436,10 @@ func (c *ControllerImpl) getLoadBalancerType(lbName string) string {
 	return ""
 }
 
-// matchLabels checks if pod labels match service selector.
 func (c *ControllerImpl) matchLabels(podLabels, svcSelector map[string]string) bool {
+	if len(svcSelector) == 0 {
+		return false
+	}
 	for k, v := range svcSelector {
 		if podLabels[k] != v {
 			return false
@@ -415,7 +448,6 @@ func (c *ControllerImpl) matchLabels(podLabels, svcSelector map[string]string) b
 	return true
 }
 
-// GetState returns the current state of the controller.
 func (c *ControllerImpl) GetState() model.ControllerState {
 	c.stateMutex.RLock()
 	defer c.stateMutex.RUnlock()

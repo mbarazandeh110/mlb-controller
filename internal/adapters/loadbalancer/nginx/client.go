@@ -1,3 +1,4 @@
+// internal/adapters/loadbalancer/nginx/client.go
 package nginx
 
 import (
@@ -6,6 +7,7 @@ import (
 	"crypto/x509"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -13,35 +15,41 @@ import (
 	"mlb-controller/internal/domain/config"
 )
 
-// NginxClient handles HTTP/HTTPS requests to an NGINX API address.
 type NginxClient struct {
 	client  *http.Client
-	baseURL string // Protocol://IP:Port/path
-	host    string // For HTTP Host header and SNI
+	baseURL string
+	host    string
 }
 
-// NewNginxClientSet creates a new NginxClient based on the provided AddressConfig.
 func NewNginxClientSet(ngx config.NginxConfig) ([]*NginxClient, error) {
+	// بهینه‌سازی Transport برای جلوگیری از TIME_WAIT و Socket Exhaustion در ریکوئست‌های پرتعداد
 	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          200,
+		MaxIdleConnsPerHost:   100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: false,        // Always false as per requirement
-			ServerName:         ngx.Hostname, // Set SNI for HTTPS
+			InsecureSkipVerify: false,
+			ServerName:         ngx.Hostname,
 		},
 	}
 
-	// Handle HTTPS with client certificate if provided
 	if ngx.Protocol == "https" && len(ngx.Key) > 0 {
 		cert, _ := tls.X509KeyPair(ngx.Cert, ngx.Key)
 		transport.TLSClientConfig.Certificates = []tls.Certificate{cert}
-		// Parse certificate to perform additional validations
 		x509Cert, _ := x509.ParseCertificate(cert.Certificate[0])
-		// Check certificate expiration
 		if time.Now().After(x509Cert.NotAfter) {
 			return nil, fmt.Errorf("certificate %s has expired: NotAfter=%s", ngx.Hostname, x509Cert.NotAfter)
 		}
 	}
 
-	// Handle CA certificate for server verification
 	if ngx.Protocol == "https" && len(ngx.CA) > 0 {
 		transport.TLSClientConfig.RootCAs = x509.NewCertPool()
 	}
@@ -51,7 +59,7 @@ func NewNginxClientSet(ngx config.NginxConfig) ([]*NginxClient, error) {
 		baseURL := fmt.Sprintf("%s://%s:%d", ngx.Protocol, addr.IP, addr.Port)
 		client := &http.Client{
 			Transport: transport,
-			Timeout:   ngx.RequestTimeout, // Configurable if needed
+			Timeout:   ngx.RequestTimeout,
 		}
 		newngx := &NginxClient{
 			client:  client,
@@ -64,34 +72,53 @@ func NewNginxClientSet(ngx config.NginxConfig) ([]*NginxClient, error) {
 	return clients, nil
 }
 
-// doRequest performs an HTTP request with the correct Host header and returns the response body.
+// پیاده‌سازی مکانیزم Retry در سطح کلاینت HTTP برای مواجهه با Network Jitter یا لود موقتی
 func (c *NginxClient) doRequest(ctx context.Context, method, path string) ([]byte, error) {
 	url := fmt.Sprintf("%s/%s", c.baseURL, strings.TrimPrefix(path, "/"))
-	req, err := http.NewRequestWithContext(ctx, method, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	var lastErr error
+	var resp *http.Response
+
+	maxRetries := 3
+	for i := 0; i < maxRetries; i++ {
+		req, err := http.NewRequestWithContext(ctx, method, url, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+
+		if c.host != "" {
+			req.Host = c.host
+		}
+
+		resp, err = c.client.Do(req)
+		if err == nil && resp.StatusCode == 200 {
+			defer resp.Body.Close()
+			bodyBytes, err := io.ReadAll(resp.Body)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read response body: %w", err)
+			}
+			return bodyBytes, nil
+		}
+
+		if resp != nil {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			lastErr = fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+			
+			// در خطاهای مربوط به سمت کلاینت (غیر از 429) تلاش مجدد بی‌فایده است
+			if resp.StatusCode >= 400 && resp.StatusCode < 500 && resp.StatusCode != 429 {
+				return nil, lastErr
+			}
+		} else {
+			lastErr = err
+		}
+
+		// Exponential backoff
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(100*(1<<i)) * time.Millisecond):
+		}
 	}
 
-	// Set Host header if specified
-	if c.host != "" {
-		req.Host = c.host
-	}
-
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	return bodyBytes, nil
+	return nil, fmt.Errorf("exhausted retries: %w", lastErr)
 }
