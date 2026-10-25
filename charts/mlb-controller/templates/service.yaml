@@ -1,0 +1,18 @@
+{{- if .Values.config.metrics.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mlb-controller.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mlb-controller.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: metrics
+      protocol: TCP
+      name: metrics
+  selector:
+    {{- include "mlb-controller.selectorLabels" . | nindent 4 }}
+{{- end }}

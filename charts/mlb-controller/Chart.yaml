@@ -1,0 +1,14 @@
+apiVersion: v2
+name: mlb-controller
+description: A Helm chart for Kubernetes Multi Load Balancer Controller (mlb-controller)
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+kubeVersion: ">=1.19.0-0"
+keywords:
+  - kubernetes
+  - controller
+  - loadbalancer
+  - nginx
+  - envoy
+  - cdn

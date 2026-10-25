@@ -1,0 +1,33 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mlb-controller.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mlb-controller.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    global_upstream_sync_period: {{ .Values.config.global_upstream_sync_period }}
+    request_pool_size: {{ .Values.config.request_pool_size }}
+    leader_election:
+      enabled: {{ .Values.config.leader_election.enabled }}
+      lease_name: {{ .Values.config.leader_election.lease_name | quote }}
+      lease_namespace: {{ default .Release.Namespace .Values.config.leader_election.lease_namespace | quote }}
+      lease_duration: {{ .Values.config.leader_election.lease_duration }}
+      renew_deadline: {{ .Values.config.leader_election.renew_deadline }}
+      retry_period: {{ .Values.config.leader_election.retry_period }}
+    log:
+      enabled: {{ .Values.config.log.enabled }}
+      level: {{ .Values.config.log.level | quote }}
+      format: {{ .Values.config.log.format | quote }}
+    metrics:
+      enabled: {{ .Values.config.metrics.enabled }}
+      port: {{ .Values.config.metrics.port }}
+      uri: {{ .Values.config.metrics.uri | quote }}
+    kubernetes:
+      resync_period: {{ .Values.config.kubernetes.resync_period }}
+      kubernetes_config: {{ .Values.config.kubernetes.kubernetes_config | quote }}
+    global_ip_replacement_list:
+      {{- toYaml .Values.config.global_ip_replacement_list | nindent 6 }}
+    loadbalancers:
+      {{- toYaml .Values.config.loadbalancers | nindent 6 }}
