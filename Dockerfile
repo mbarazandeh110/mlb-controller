@@ -27,5 +27,5 @@ ENV CONFIG_PATH=/configs/config.yaml
 
 EXPOSE 8080 9090
 
-# اجرای مستقیم بدون shell
-CMD ["/mlb-controller"]
+ENTRYPOINT ["/mlb-controller"]
+CMD ["--config=/etc/mlb-controller/config.yaml"]
