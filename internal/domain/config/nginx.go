@@ -27,6 +27,8 @@ type NginxConfig struct {
 	Key                []byte            `mapstructure:"-"` // This will hold the content
 	CA                 []byte            `mapstructure:"-"` // This will hold the content
 	RequestPoolSize    int               `mapstructure:"request_pool_size"`
+	PruneOrphans       bool              `mapstructure:"prune_orphans"`
+	AllowEmptyUpstream bool              `mapstructure:"allow_empty_upstream"`
 }
 
 func (c NginxConfig) GetName() string                         { return c.Name }
@@ -41,6 +43,8 @@ func (c NginxConfig) GetKeyPath() string                      { return c.KeyPath
 func (c NginxConfig) GetCAPath() string                       { return c.CAPath }
 func (c NginxConfig) GetRequestTimeOut() time.Duration        { return c.RequestTimeout }
 func (c NginxConfig) GetRequestPoolSize() int                 { return c.RequestPoolSize }
+func (c NginxConfig) GetPruneOrphans() bool                   { return c.PruneOrphans }
+func (c NginxConfig) GetAllowEmptyUpstream() bool             { return c.AllowEmptyUpstream }
 
 func (c NginxConfig) SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig {
 	if c.UpstreamSyncPeriod == 0 {

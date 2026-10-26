@@ -156,7 +156,7 @@ func mapstructureDecode(input interface{}, output interface{}) error {
 
 // Helper function to load certificates
 func (l *ViperLoader) loadCertificatesForLoadBalancer(ctx context.Context, configName, certPath, keyPath, caPath, hostname string) (*certificate_ports.CertificateContent, error) {
-	if certPath == "" || keyPath == "" {
+	if certPath == "" && keyPath == "" && caPath == "" {
 		return &certificate_ports.CertificateContent{}, nil
 	}
 

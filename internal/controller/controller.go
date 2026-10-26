@@ -4,6 +4,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -69,6 +70,10 @@ func NewController(
 func (c *ControllerImpl) Start(ctx context.Context) error {
 	c.logger.Info("Starting controller with Two-Way Reconciliation Engine")
 
+	if err := c.k8sClient.Start(ctx); err != nil {
+		return fmt.Errorf("failed to start and sync kubernetes informers: %w", err)
+	}
+
 	go func() {
 		if err := c.k8sClient.WatchServices(ctx, nil, c.serviceEvents); err != nil {
 			c.logger.Error("Failed to watch services", logging.Field{Key: "error", Value: err})
@@ -107,7 +112,11 @@ func (c *ControllerImpl) stop() {
 	if c.syncTicker != nil {
 		c.syncTicker.Stop()
 	}
-	close(c.syncStop)
+	select {
+	case <-c.syncStop:
+	default:
+		close(c.syncStop)
+	}
 	c.queue.ShutDown()
 }
 
@@ -141,12 +150,19 @@ func (c *ControllerImpl) processNextItem(ctx context.Context) bool {
 }
 
 func (c *ControllerImpl) syncHandler(ctx context.Context, key string) error {
-	c.stateMutex.RLock()
-	svc, exists := c.state.Services[key]
-	lastSvc, hadLast := c.lastKnownServices[key]
-	c.stateMutex.RUnlock()
+	parts := strings.Split(key, "/")
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid resource key: %s", key)
+	}
+	namespace, name := parts[0], parts[1]
 
-	if !exists {
+	svc, err := c.k8sClient.GetService(namespace, name)
+	if err != nil {
+		// Service deleted or no longer managed
+		c.stateMutex.RLock()
+		lastSvc, hadLast := c.lastKnownServices[key]
+		c.stateMutex.RUnlock()
+
 		if !hadLast {
 			return nil
 		}
@@ -155,15 +171,17 @@ func (c *ControllerImpl) syncHandler(ctx context.Context, key string) error {
 		}
 		c.stateMutex.Lock()
 		delete(c.lastKnownServices, key)
+		delete(c.state.Services, key)
 		c.stateMutex.Unlock()
 		return nil
 	}
 
 	c.stateMutex.Lock()
-	c.lastKnownServices[key] = svc
+	c.lastKnownServices[key] = *svc
+	c.state.Services[key] = *svc
 	c.stateMutex.Unlock()
 
-	return c.syncUpstreamsForService(ctx, svc)
+	return c.syncUpstreamsForService(ctx, *svc)
 }
 
 func (c *ControllerImpl) handleServiceDeletion(ctx context.Context, key string, svc model.Service) error {
@@ -175,16 +193,18 @@ func (c *ControllerImpl) handleServiceDeletion(ctx context.Context, key string, 
 	}
 
 	// Check if another Service in the cluster still targets this (lbName, upstreamName)
-	c.stateMutex.RLock()
+	services, err := c.k8sClient.ListServices()
 	var otherSvc *model.Service
-	for _, s := range c.state.Services {
-		if s.Labels["mlb-loadbalancer-name"] == lbName && s.Labels["mlb-upstream-name"] == upstreamName {
-			copied := s
-			otherSvc = &copied
-			break
+	if err == nil {
+		for _, s := range services {
+			sKey := fmt.Sprintf("%s/%s", s.Namespace, s.Name)
+			if sKey != key && s.Labels["mlb-loadbalancer-name"] == lbName && s.Labels["mlb-upstream-name"] == upstreamName {
+				copied := s
+				otherSvc = &copied
+				break
+			}
 		}
 	}
-	c.stateMutex.RUnlock()
 
 	if otherSvc != nil {
 		// Another service still targets the upstream; resync with its state
@@ -313,10 +333,32 @@ func (c *ControllerImpl) syncUpstreamsForService(ctx context.Context, svc model.
 		return fmt.Errorf("failed to get pods for service %s/%s: %w", svc.Namespace, svc.Name, err)
 	}
 
-	upstream := c.buildUpstream(ctx, svc, pods)
+	upstream, err := c.buildUpstream(ctx, svc, pods)
+	if err != nil {
+		c.metrics.IncrementSyncErrors(upstreamName)
+		return fmt.Errorf("failed to build upstream for service %s/%s: %w", svc.Namespace, svc.Name, err)
+	}
 	if upstream == nil {
-		c.metrics.UpdateBackendsTotal(upstreamName, 0)
 		return nil
+	}
+
+	// Merge backends from other Services that target this same (lbName, upstreamName)
+	allServices, err := c.k8sClient.ListServices()
+	if err == nil {
+		for _, otherSvc := range allServices {
+			if otherSvc.Namespace == svc.Namespace && otherSvc.Name == svc.Name {
+				continue
+			}
+			if otherSvc.Labels["mlb-loadbalancer-name"] == lbName && otherSvc.Labels["mlb-upstream-name"] == upstreamName {
+				otherPods, err := c.k8sClient.GetPodsForSelector(ctx, otherSvc.Namespace, otherSvc.Selector)
+				if err == nil {
+					otherUp, err := c.buildUpstream(ctx, otherSvc, otherPods)
+					if err == nil && otherUp != nil {
+						upstream.Backends = c.mergeBackends(upstream.Backends, otherUp.Backends)
+					}
+				}
+			}
+		}
 	}
 
 	c.metrics.UpdateBackendsTotal(upstreamName, float64(len(upstream.Backends)))
@@ -359,12 +401,15 @@ func (c *ControllerImpl) runPeriodicSync(ctx context.Context) {
 func (c *ControllerImpl) SyncUpstreams(ctx context.Context) error {
 	startTime := time.Now()
 
-	c.stateMutex.RLock()
-	services := make([]model.Service, 0, len(c.state.Services))
-	for _, svc := range c.state.Services {
-		services = append(services, svc)
+	if !c.HasSynced() {
+		c.logger.Warn("Skipping SyncUpstreams because informer caches are not yet synchronized")
+		return nil
 	}
-	c.stateMutex.RUnlock()
+
+	services, err := c.k8sClient.ListServices()
+	if err != nil {
+		return fmt.Errorf("failed to list services from lister: %w", err)
+	}
 
 	desiredState := make(map[string]map[string]model.Upstream)
 	for lbName := range c.loadBalancers {
@@ -379,14 +424,27 @@ func (c *ControllerImpl) SyncUpstreams(ctx context.Context) error {
 
 		pods, err := c.k8sClient.GetPodsForSelector(ctx, svc.Namespace, svc.Selector)
 		if err != nil {
-			c.logger.Error("Failed to list pods for bulk reconciliation", logging.Field{Key: "service", Value: svc.Name})
+			c.logger.Error("Failed to list pods for bulk reconciliation", logging.Field{Key: "service", Value: svc.Name}, logging.Field{Key: "error", Value: err})
 			continue
 		}
 
-		if upstream := c.buildUpstream(ctx, svc, pods); upstream != nil {
-			if _, exists := desiredState[lbName]; !exists {
-				desiredState[lbName] = make(map[string]model.Upstream)
-			}
+		upstream, err := c.buildUpstream(ctx, svc, pods)
+		if err != nil {
+			c.logger.Error("Failed to build upstream for bulk reconciliation", logging.Field{Key: "service", Value: svc.Name}, logging.Field{Key: "error", Value: err})
+			continue
+		}
+		if upstream == nil {
+			continue
+		}
+
+		if _, exists := desiredState[lbName]; !exists {
+			desiredState[lbName] = make(map[string]model.Upstream)
+		}
+
+		if existingUp, exists := desiredState[lbName][upstream.Name]; exists {
+			existingUp.Backends = c.mergeBackends(existingUp.Backends, upstream.Backends)
+			desiredState[lbName][upstream.Name] = existingUp
+		} else {
 			desiredState[lbName][upstream.Name] = *upstream
 		}
 	}
@@ -419,11 +477,11 @@ func (c *ControllerImpl) SyncUpstreams(ctx context.Context) error {
 	return nil
 }
 
-func (c *ControllerImpl) buildUpstream(ctx context.Context, svc model.Service, pods []model.Pod) *model.Upstream {
+func (c *ControllerImpl) buildUpstream(ctx context.Context, svc model.Service, pods []model.Pod) (*model.Upstream, error) {
 	lbName := svc.Labels["mlb-loadbalancer-name"]
 	upstreamName := svc.Labels["mlb-upstream-name"]
 	if svc.NodePort == 0 || lbName == "" || upstreamName == "" {
-		return nil
+		return nil, nil
 	}
 
 	backends := make([]model.Backend, 0)
@@ -434,7 +492,7 @@ func (c *ControllerImpl) buildUpstream(ctx context.Context, svc model.Service, p
 
 		node, err := c.k8sClient.GetNodeByName(ctx, pod.NodeName)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("failed to get node %s for pod %s: %w", pod.NodeName, pod.Name, err)
 		}
 
 		nodeIP := node.InternalIP
@@ -464,7 +522,34 @@ func (c *ControllerImpl) buildUpstream(ctx context.Context, svc model.Service, p
 		Backends:     backends,
 		Type:         c.getLoadBalancerType(lbName),
 		Config:       lbConfig,
+	}, nil
+}
+
+func (c *ControllerImpl) mergeBackends(a, b []model.Backend) []model.Backend {
+	m := make(map[string]model.Backend)
+	for _, be := range a {
+		key := fmt.Sprintf("%s:%d", be.IP, be.Port)
+		if existing, ok := m[key]; ok {
+			existing.Weight += be.Weight
+			m[key] = existing
+		} else {
+			m[key] = be
+		}
 	}
+	for _, be := range b {
+		key := fmt.Sprintf("%s:%d", be.IP, be.Port)
+		if existing, ok := m[key]; ok {
+			existing.Weight += be.Weight
+			m[key] = existing
+		} else {
+			m[key] = be
+		}
+	}
+	res := make([]model.Backend, 0, len(m))
+	for _, be := range m {
+		res = append(res, be)
+	}
+	return res
 }
 
 func (c *ControllerImpl) syncLoadBalancerUpstream(ctx context.Context, upstream *model.Upstream) error {
@@ -549,4 +634,12 @@ func (c *ControllerImpl) HasSynced() bool {
 		return false
 	}
 	return c.k8sClient.HasSynced()
+}
+
+// StartInformers starts the underlying informers independently of leadership.
+func (c *ControllerImpl) StartInformers(ctx context.Context) error {
+	if c.k8sClient == nil {
+		return nil
+	}
+	return c.k8sClient.Start(ctx)
 }

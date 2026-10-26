@@ -239,7 +239,6 @@ func setupTestKubernetesAdapter(t *testing.T) (*KubernetesAdapter, *k8sclient.Cl
 		logger:          logger,
 		config:          config.KubernetesConfig{ResyncPeriod: 10 * time.Minute},
 		informerFactory: informerFactory,
-		started:         false,
 	}
 
 	_, cancel := context.WithCancel(context.Background())
@@ -549,7 +548,6 @@ func TestKubernetesAdapter_GetPodsForSelector(t *testing.T) {
 		client:          fakeClient,
 		logger:          &fakeLogger{},
 		informerFactory: informerFactory,
-		started:         true,
 	}
 
 	ctx := context.Background()
@@ -561,10 +559,10 @@ func TestKubernetesAdapter_GetPodsForSelector(t *testing.T) {
 		assert.Equal(t, "pod-a", pods[0].Name)
 	})
 
-	t.Run("Empty selector returns all pods in namespace", func(t *testing.T) {
+	t.Run("Empty selector returns empty slice to prevent accidental wildcard matching", func(t *testing.T) {
 		pods, err := adapter.GetPodsForSelector(ctx, "default", map[string]string{})
 		assert.NoError(t, err)
-		assert.Len(t, pods, 2)
+		assert.Empty(t, pods)
 	})
 
 	t.Run("Non-matching selector returns empty slice", func(t *testing.T) {
@@ -598,7 +596,6 @@ func TestKubernetesAdapter_GetNodeByName(t *testing.T) {
 		client:          fakeClient,
 		logger:          &fakeLogger{},
 		informerFactory: informerFactory,
-		started:         true,
 	}
 
 	ctx := context.Background()
@@ -623,7 +620,6 @@ func TestKubernetesAdapter_GetNodeByName(t *testing.T) {
 			client:          fakeClient, // client has worker-1
 			logger:          &fakeLogger{},
 			informerFactory: emptyInformerFactory,
-			started:         true,
 		}
 
 		res, err := fallbackAdapter.GetNodeByName(ctx, "worker-1")

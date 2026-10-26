@@ -132,6 +132,16 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 				currentBackends = allBackends[""]
 			}
 
+			// Safety Net check: If desired has 0 backends and current has > 0 backends,
+			// and AllowEmptyUpstream is false, skip draining to prevent outage!
+			if len(upstream.Backends) == 0 && len(currentBackends) > 0 && !a.config.AllowEmptyUpstream {
+				a.logger.Warn("Safety Net triggered: skipping backend draining because allow_empty_upstream is false",
+					logging.Field{Key: "client", Value: c.baseURL},
+					logging.Field{Key: "upstream", Value: upstream.Name},
+					logging.Field{Key: "current_backends", Value: len(currentBackends)})
+				return
+			}
+
 			updateBackends := make(map[string]model.Backend)
 			removeBackends := make(map[string]model.Backend)
 			changed := false
@@ -172,11 +182,7 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 			for _, k := range updateKeys {
 				backend := updateBackends[k]
 				serverAddr := formatServerAddr(backend.IP, backend.Port)
-				path := fmt.Sprintf("%s?upstream=%s&server=%s&weight=%d",
-					strings.TrimPrefix(a.config.AddAPI, "/"),
-					url.QueryEscape(upstream.Name),
-					url.QueryEscape(serverAddr),
-					backend.Weight)
+				path := a.buildAddPath(upstream.Name, serverAddr, backend.Weight)
 
 				a.logger.Debug("Syncing backend to NGINX",
 					logging.Field{Key: "client", Value: c.baseURL},
@@ -212,10 +218,7 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 			for _, k := range removeKeys {
 				backend := removeBackends[k]
 				serverAddr := formatServerAddr(backend.IP, backend.Port)
-				path := fmt.Sprintf("%s?upstream=%s&server=%s",
-					strings.TrimPrefix(a.config.RemoveAPI, "/"),
-					url.QueryEscape(upstream.Name),
-					url.QueryEscape(serverAddr))
+				path := a.buildRemovePath(upstream.Name, serverAddr)
 
 				a.logger.Debug("Removing backend from NGINX",
 					logging.Field{Key: "client", Value: c.baseURL},
@@ -253,6 +256,19 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 // این متد توسط کنترلر در بازه‌های زمانی مشخص فراخوانی می‌شود تا آپ‌استریم‌هایی که از K8s پاک شده‌اند، از NGINX نیز حذف شوند.
 func (a *NginxAdapter) SyncAllUpstreams(ctx context.Context, desiredUpstreams map[string]model.Upstream) error {
 	var errors *multierror.Error
+
+	// 1. Reconcile all desired upstreams to actively fix any state drift
+	for _, desiredUp := range desiredUpstreams {
+		if err := a.SyncUpstream(ctx, desiredUp); err != nil {
+			errors = multierror.Append(errors, fmt.Errorf("sync upstream %s failed: %w", desiredUp.Name, err))
+		}
+	}
+
+	// 2. If PruneOrphans is enabled, find and remove upstreams present on NGINX that are not in desiredUpstreams
+	if !a.config.PruneOrphans {
+		return errors.ErrorOrNil()
+	}
+
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
@@ -284,21 +300,18 @@ func (a *NginxAdapter) SyncAllUpstreams(ctx context.Context, desiredUpstreams ma
 			}
 			sort.Strings(upstreamNames)
 
-			// یافتن آپ‌استریم‌های یتیم (Orphaned) که در NGINX هستند اما در K8s وجود ندارند یا بدون Backend هستند
+			// یافتن آپ‌استریم‌های یتیم (Orphaned) که در NGINX هستند اما در K8s وجود ندارند
 			changed := false
 			for _, upstreamName := range upstreamNames {
 				if upstreamName == "" {
 					continue
 				}
 				backends := allNginxUpstreams[upstreamName]
-				desiredUp, exists := desiredUpstreams[upstreamName]
-				if !exists || len(desiredUp.Backends) == 0 {
+				_, exists := desiredUpstreams[upstreamName]
+				if !exists {
 					for _, backend := range backends {
 						serverAddr := formatServerAddr(backend.IP, backend.Port)
-						path := fmt.Sprintf("%s?upstream=%s&server=%s",
-							strings.TrimPrefix(a.config.RemoveAPI, "/"),
-							url.QueryEscape(upstreamName),
-							url.QueryEscape(serverAddr))
+						path := a.buildRemovePath(upstreamName, serverAddr)
 
 						a.logger.Debug("Removing orphaned backend from NGINX",
 							logging.Field{Key: "client", Value: c.baseURL},
@@ -332,6 +345,41 @@ func (a *NginxAdapter) SyncAllUpstreams(ctx context.Context, desiredUpstreams ma
 
 	wg.Wait()
 	return errors.ErrorOrNil()
+}
+
+func (a *NginxAdapter) buildAddPath(upstreamName, serverAddr string, weight int) string {
+	api := strings.TrimPrefix(a.config.AddAPI, "/")
+	delim := "?"
+	if strings.Contains(api, "?") {
+		delim = "&"
+	}
+	path := fmt.Sprintf("%s%supstream=%s&server=%s&weight=%d",
+		api,
+		delim,
+		url.QueryEscape(upstreamName),
+		url.QueryEscape(serverAddr),
+		weight)
+	if !strings.Contains(api, "add") {
+		path += "&add="
+	}
+	return path
+}
+
+func (a *NginxAdapter) buildRemovePath(upstreamName, serverAddr string) string {
+	api := strings.TrimPrefix(a.config.RemoveAPI, "/")
+	delim := "?"
+	if strings.Contains(api, "?") {
+		delim = "&"
+	}
+	path := fmt.Sprintf("%s%supstream=%s&server=%s",
+		api,
+		delim,
+		url.QueryEscape(upstreamName),
+		url.QueryEscape(serverAddr))
+	if !strings.Contains(api, "remove") {
+		path += "&remove="
+	}
+	return path
 }
 
 // پارس کردن خروجی متنی Bulk NGINX و نگاشت آن به ساختار Map

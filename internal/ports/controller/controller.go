@@ -10,6 +10,8 @@ import (
 type Controller interface {
 	// Start initializes the controller and begins monitoring Kubernetes resources.
 	Start(ctx context.Context) error
+	// StartInformers starts the underlying informers independently of leadership.
+	StartInformers(ctx context.Context) error
 	// SyncUpstreams synchronizes the upstreams for all monitored services.
 	SyncUpstreams(ctx context.Context) error
 	// GetState returns the current state of the controller.

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"sync"
 
 	"mlb-controller/internal/domain/config"
 	"mlb-controller/internal/domain/model"
@@ -25,7 +26,7 @@ type KubernetesAdapter struct {
 	logger          logging.Logger
 	config          config.KubernetesConfig
 	informerFactory informers.SharedInformerFactory
-	started         bool
+	startOnce       sync.Once
 }
 
 func NewKubernetesAdapter(k8sCfg config.KubernetesConfig, logger logging.Logger) (*KubernetesAdapter, error) {
@@ -45,23 +46,38 @@ func NewKubernetesAdapter(k8sCfg config.KubernetesConfig, logger logging.Logger)
 		logger:          logger,
 		config:          k8sCfg,
 		informerFactory: informerFactory,
-		started:         false,
 	}, nil
 }
 
-func (k *KubernetesAdapter) startInformers(ctx context.Context) {
-	if !k.started {
-		go k.informerFactory.Start(ctx.Done())
-		k.started = true
-		k.logger.Info("Kubernetes informers started")
+// Start registers and starts all informers, and blocks until all caches are synchronized.
+func (k *KubernetesAdapter) Start(ctx context.Context) error {
+	if k.informerFactory == nil {
+		return fmt.Errorf("informerFactory is nil")
 	}
+
+	var syncErr error
+	k.startOnce.Do(func() {
+		// Touch informers to instantiate them before factory start
+		svcInformer := k.informerFactory.Core().V1().Services().Informer()
+		podInformer := k.informerFactory.Core().V1().Pods().Informer()
+		nodeInformer := k.informerFactory.Core().V1().Nodes().Informer()
+
+		k.informerFactory.Start(ctx.Done())
+		k.logger.Info("Kubernetes informers started")
+
+		if !cache.WaitForCacheSync(ctx.Done(), svcInformer.HasSynced, podInformer.HasSynced, nodeInformer.HasSynced) {
+			syncErr = fmt.Errorf("failed to sync kubernetes informers")
+			return
+		}
+		k.logger.Info("Kubernetes informer caches synchronized")
+	})
+	return syncErr
 }
 
-// استفاده از Non-blocking Send برای کانال‌ها
-func sendServiceEvent(events chan<- kubernetes.ServiceEvent, event kubernetes.ServiceEvent) {
+func sendServiceEvent(ctx context.Context, events chan<- kubernetes.ServiceEvent, event kubernetes.ServiceEvent) {
 	select {
 	case events <- event:
-	default:
+	case <-ctx.Done():
 	}
 }
 
@@ -71,7 +87,7 @@ func (k *KubernetesAdapter) WatchServices(ctx context.Context, requiredLabels ma
 		AddFunc: func(obj interface{}) {
 			svc, ok := obj.(*corev1.Service)
 			if ok && k.isMLBService(svc) {
-				sendServiceEvent(events, kubernetes.ServiceEvent{
+				sendServiceEvent(ctx, events, kubernetes.ServiceEvent{
 					Type:    kubernetes.EventTypeAdd,
 					Service: k.mapService(svc),
 				})
@@ -87,12 +103,12 @@ func (k *KubernetesAdapter) WatchServices(ctx context.Context, requiredLabels ma
 			isMLB := k.isMLBService(newSvc)
 
 			if wasMLB && !isMLB {
-				sendServiceEvent(events, kubernetes.ServiceEvent{
+				sendServiceEvent(ctx, events, kubernetes.ServiceEvent{
 					Type:    kubernetes.EventTypeDelete,
 					Service: k.mapService(oldSvc),
 				})
 			} else if isMLB {
-				sendServiceEvent(events, kubernetes.ServiceEvent{
+				sendServiceEvent(ctx, events, kubernetes.ServiceEvent{
 					Type:    kubernetes.EventTypeUpdate,
 					Service: k.mapService(newSvc),
 				})
@@ -104,7 +120,7 @@ func (k *KubernetesAdapter) WatchServices(ctx context.Context, requiredLabels ma
 			}
 			svc, ok := obj.(*corev1.Service)
 			if ok && k.isMLBService(svc) {
-				sendServiceEvent(events, kubernetes.ServiceEvent{
+				sendServiceEvent(ctx, events, kubernetes.ServiceEvent{
 					Type:    kubernetes.EventTypeDelete,
 					Service: k.mapService(svc),
 				})
@@ -112,28 +128,26 @@ func (k *KubernetesAdapter) WatchServices(ctx context.Context, requiredLabels ma
 		},
 	})
 
-	k.startInformers(ctx)
-	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
-		return fmt.Errorf("failed to sync service informer")
+	if err := k.Start(ctx); err != nil {
+		return err
 	}
 
 	<-ctx.Done()
 	return ctx.Err()
 }
 
-func sendPodEvent(events chan<- kubernetes.PodEvent, event kubernetes.PodEvent) {
+func sendPodEvent(ctx context.Context, events chan<- kubernetes.PodEvent, event kubernetes.PodEvent) {
 	select {
 	case events <- event:
-	default:
+	case <-ctx.Done():
 	}
 }
-
 func (k *KubernetesAdapter) WatchPods(ctx context.Context, events chan<- kubernetes.PodEvent) error {
 	informer := k.informerFactory.Core().V1().Pods().Informer()
 	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			if pod, ok := obj.(*corev1.Pod); ok {
-				sendPodEvent(events, kubernetes.PodEvent{
+				sendPodEvent(ctx, events, kubernetes.PodEvent{
 					Type: kubernetes.EventTypeAdd,
 					Pod:  k.mapPod(pod),
 				})
@@ -141,7 +155,7 @@ func (k *KubernetesAdapter) WatchPods(ctx context.Context, events chan<- kuberne
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			if pod, ok := newObj.(*corev1.Pod); ok {
-				sendPodEvent(events, kubernetes.PodEvent{
+				sendPodEvent(ctx, events, kubernetes.PodEvent{
 					Type: kubernetes.EventTypeUpdate,
 					Pod:  k.mapPod(pod),
 				})
@@ -152,7 +166,7 @@ func (k *KubernetesAdapter) WatchPods(ctx context.Context, events chan<- kuberne
 				obj = tombstone.Obj
 			}
 			if pod, ok := obj.(*corev1.Pod); ok {
-				sendPodEvent(events, kubernetes.PodEvent{
+				sendPodEvent(ctx, events, kubernetes.PodEvent{
 					Type: kubernetes.EventTypeDelete,
 					Pod:  k.mapPod(pod),
 				})
@@ -160,19 +174,18 @@ func (k *KubernetesAdapter) WatchPods(ctx context.Context, events chan<- kuberne
 		},
 	})
 
-	k.startInformers(ctx)
-	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
-		return fmt.Errorf("failed to sync pod informer")
+	if err := k.Start(ctx); err != nil {
+		return err
 	}
 
 	<-ctx.Done()
 	return ctx.Err()
 }
 
-func sendNodeEvent(events chan<- kubernetes.NodeEvent, event kubernetes.NodeEvent) {
+func sendNodeEvent(ctx context.Context, events chan<- kubernetes.NodeEvent, event kubernetes.NodeEvent) {
 	select {
 	case events <- event:
-	default:
+	case <-ctx.Done():
 	}
 }
 
@@ -181,7 +194,7 @@ func (k *KubernetesAdapter) WatchNodes(ctx context.Context, events chan<- kubern
 	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			if node, ok := obj.(*corev1.Node); ok {
-				sendNodeEvent(events, kubernetes.NodeEvent{
+				sendNodeEvent(ctx, events, kubernetes.NodeEvent{
 					Type: kubernetes.EventTypeAdd,
 					Node: k.mapNode(node),
 				})
@@ -189,7 +202,7 @@ func (k *KubernetesAdapter) WatchNodes(ctx context.Context, events chan<- kubern
 		},
 		UpdateFunc: func(oldObj, newObj interface{}) {
 			if node, ok := newObj.(*corev1.Node); ok {
-				sendNodeEvent(events, kubernetes.NodeEvent{
+				sendNodeEvent(ctx, events, kubernetes.NodeEvent{
 					Type: kubernetes.EventTypeUpdate,
 					Node: k.mapNode(node),
 				})
@@ -200,7 +213,7 @@ func (k *KubernetesAdapter) WatchNodes(ctx context.Context, events chan<- kubern
 				obj = tombstone.Obj
 			}
 			if node, ok := obj.(*corev1.Node); ok {
-				sendNodeEvent(events, kubernetes.NodeEvent{
+				sendNodeEvent(ctx, events, kubernetes.NodeEvent{
 					Type: kubernetes.EventTypeDelete,
 					Node: k.mapNode(node),
 				})
@@ -208,9 +221,8 @@ func (k *KubernetesAdapter) WatchNodes(ctx context.Context, events chan<- kubern
 		},
 	})
 
-	k.startInformers(ctx)
-	if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
-		return fmt.Errorf("failed to sync node informer")
+	if err := k.Start(ctx); err != nil {
+		return err
 	}
 
 	<-ctx.Done()
@@ -219,6 +231,9 @@ func (k *KubernetesAdapter) WatchNodes(ctx context.Context, events chan<- kubern
 
 // جایگزین کردن فراخوانی مستقیم API Server با خواندن از حافظه محلی کش (Lister)
 func (k *KubernetesAdapter) GetPodsForSelector(ctx context.Context, namespace string, selector map[string]string) ([]model.Pod, error) {
+	if len(selector) == 0 {
+		return nil, nil // Empty selector must never match all pods in namespace
+	}
 	sel := labels.SelectorFromSet(selector)
 	pods, err := k.informerFactory.Core().V1().Pods().Lister().Pods(namespace).List(sel)
 	if err != nil {
@@ -228,6 +243,32 @@ func (k *KubernetesAdapter) GetPodsForSelector(ctx context.Context, namespace st
 	var result []model.Pod
 	for _, pod := range pods {
 		result = append(result, k.mapPod(pod))
+	}
+	return result, nil
+}
+
+func (k *KubernetesAdapter) GetService(namespace, name string) (*model.Service, error) {
+	svc, err := k.informerFactory.Core().V1().Services().Lister().Services(namespace).Get(name)
+	if err != nil {
+		return nil, err
+	}
+	if !k.isMLBService(svc) {
+		return nil, fmt.Errorf("service %s/%s is not an MLB service", namespace, name)
+	}
+	mapped := k.mapService(svc)
+	return &mapped, nil
+}
+
+func (k *KubernetesAdapter) ListServices() ([]model.Service, error) {
+	svcs, err := k.informerFactory.Core().V1().Services().Lister().List(labels.Everything())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list services: %w", err)
+	}
+	var result []model.Service
+	for _, svc := range svcs {
+		if k.isMLBService(svc) {
+			result = append(result, k.mapService(svc))
+		}
 	}
 	return result, nil
 }
@@ -293,24 +334,21 @@ func (k *KubernetesAdapter) isMLBService(svc *corev1.Service) bool {
 }
 
 func (k *KubernetesAdapter) isPodReady(pod *corev1.Pod) bool {
-	hasReadinessProbe := false
-	for _, container := range pod.Spec.Containers {
-		if container.ReadinessProbe != nil {
-			hasReadinessProbe = true
-			break
-		}
-	}
-
-	if hasReadinessProbe {
-		for _, condition := range pod.Status.Conditions {
-			if condition.Type == corev1.PodReady && condition.Status == corev1.ConditionTrue {
-				return true
-			}
-		}
+	// Terminating pods must never receive traffic
+	if pod.DeletionTimestamp != nil {
 		return false
 	}
 
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+
 	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	if len(pod.Status.ContainerStatuses) == 0 {
 		return false
 	}
 	for _, container := range pod.Status.ContainerStatuses {

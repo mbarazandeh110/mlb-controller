@@ -162,7 +162,7 @@ func TestSyncUpstream(t *testing.T) {
 		assert.True(t, foundSyncLog, "Expected structured logging on sync")
 	})
 
-	t.Run("SyncUpstream_EmptyBackendsDrainsAll", func(t *testing.T) {
+	t.Run("SyncUpstream_EmptyBackendsSafetyNet", func(t *testing.T) {
 		mu.Lock()
 		requests = nil
 		mu.Unlock()
@@ -173,7 +173,41 @@ func TestSyncUpstream(t *testing.T) {
 			Backends: []model.Backend{},
 		}
 
+		// With AllowEmptyUpstream = false (default), safety net prevents drain
 		err := adapter.SyncUpstream(ctx, upstream)
+		assert.NoError(t, err)
+
+		mu.Lock()
+		reqs := append([]string(nil), requests...)
+		mu.Unlock()
+
+		var foundRemove bool
+		for _, req := range reqs {
+			if strings.Contains(req, "upstream_remove") {
+				foundRemove = true
+				break
+			}
+		}
+		assert.False(t, foundRemove, "Expected no upstream_remove when AllowEmptyUpstream is false")
+	})
+
+	t.Run("SyncUpstream_EmptyBackendsDrainsAll_WhenAllowed", func(t *testing.T) {
+		mu.Lock()
+		requests = nil
+		mu.Unlock()
+
+		drainCfg := cfg
+		drainCfg.AllowEmptyUpstream = true
+		drainAdapter, err := NewNginxAdapter(drainCfg, logger)
+		require.NoError(t, err)
+
+		ctx := context.Background()
+		upstream := model.Upstream{
+			Name:     "test-upstream",
+			Backends: []model.Backend{},
+		}
+
+		err = drainAdapter.SyncUpstream(ctx, upstream)
 		assert.NoError(t, err)
 
 		mu.Lock()
@@ -187,7 +221,7 @@ func TestSyncUpstream(t *testing.T) {
 				break
 			}
 		}
-		assert.True(t, foundRemove, "Expected upstream_remove to be called when draining backends")
+		assert.True(t, foundRemove, "Expected upstream_remove to be called when draining backends is allowed")
 	})
 
 	t.Run("SyncUpstream_TTLCacheHit_Vs_MutationInvalidation", func(t *testing.T) {
@@ -408,13 +442,45 @@ func TestSyncAllUpstreams(t *testing.T) {
 		RemoveAPI:       "/upstream_remove",
 		RequestPoolSize: 2,
 		RequestTimeout:  5 * time.Second,
+		PruneOrphans:    true,
 	}
 
 	logger := &fakeLogger{}
 	adapter, err := NewNginxAdapter(cfg, logger)
 	require.NoError(t, err)
 
+	t.Run("SyncAllUpstreams_PreservesOrphansWhenPruneOrphansFalse", func(t *testing.T) {
+		mu.Lock()
+		removeRequests = nil
+		mu.Unlock()
+
+		noPruneCfg := cfg
+		noPruneCfg.PruneOrphans = false
+		noPruneAdapter, err := NewNginxAdapter(noPruneCfg, logger)
+		require.NoError(t, err)
+
+		desired := map[string]model.Upstream{
+			"active-upstream": {
+				Name: "active-upstream",
+				Backends: []model.Backend{
+					{IP: "10.0.0.1", Port: 8080, Weight: 1},
+				},
+			},
+		}
+
+		err = noPruneAdapter.SyncAllUpstreams(context.Background(), desired)
+		assert.NoError(t, err)
+
+		mu.Lock()
+		defer mu.Unlock()
+		assert.Equal(t, 0, len(removeRequests), "Expected orphaned-upstream backend NOT to be removed when PruneOrphans is false")
+	})
+
 	t.Run("SyncAllUpstreams_RemovesOrphanedAndLogs", func(t *testing.T) {
+		mu.Lock()
+		removeRequests = nil
+		mu.Unlock()
+
 		ctx := context.Background()
 		desired := map[string]model.Upstream{
 			"active-upstream": {

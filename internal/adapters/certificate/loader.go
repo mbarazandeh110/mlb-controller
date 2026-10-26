@@ -3,9 +3,11 @@ package certificate
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
 	"time"
@@ -31,12 +33,23 @@ func (f *FileLoader) Load(ctx context.Context, certPath, keyPath, caPath, hostna
 		return nil, err
 	}
 	if certPath != "" {
-		certContent, _ = os.ReadFile(certPath)
-		keyContent, _ = os.ReadFile(keyPath)
+		var readErr error
+		certContent, readErr = os.ReadFile(certPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("failed to read cert file '%s': %w", certPath, readErr)
+		}
+		keyContent, readErr = os.ReadFile(keyPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("failed to read key file '%s': %w", keyPath, readErr)
+		}
 	}
 
 	if caPath != "" {
-		caContent, _ = os.ReadFile(caPath)
+		var readErr error
+		caContent, readErr = os.ReadFile(caPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("failed to read ca file '%s': %w", caPath, readErr)
+		}
 	}
 
 	return &certificate_ports.CertificateContent{
@@ -97,14 +110,16 @@ func validateCA(caFilePath, certFilePath, hostname string) error {
 		if err != nil {
 			return fmt.Errorf("failed to read cert_file '%s': %w", certFilePath, err)
 		}
-		cert, err := x509.ParseCertificate(certContent)
+		block, _ := pem.Decode(certContent)
+		if block == nil {
+			return fmt.Errorf("failed to decode PEM block in cert_file '%s'", certFilePath)
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
 			return fmt.Errorf("failed to parse certificate: %w", err)
 		}
 		opts := x509.VerifyOptions{
-			Roots:     caCertPool,
-			DNSName:   hostname,
-			KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			Roots: caCertPool,
 		}
 		if _, err := cert.Verify(opts); err != nil {
 			return fmt.Errorf("certificate verification failed: %w", err)
@@ -165,6 +180,8 @@ func validateCertKey(certPath, keyPath, hostname string) error {
 		if bitLen < 256 { // Minimum for P-256
 			return fmt.Errorf("certificate uses insecure ECDSA key length: %d bits (minimum 256 required)", bitLen)
 		}
+	case ed25519.PublicKey:
+		// Ed25519 keys are 256 bits by definition and secure
 	default:
 		return fmt.Errorf("unsupported public key type: %T", x509Cert.PublicKey)
 	}

@@ -43,6 +43,9 @@ func NewApp(
 func (a *App) Start(ctx context.Context) error {
 	a.logger.Info("Starting application...", logging_ports.Field{Key: "app", Value: "mlb-controller"})
 
+	appCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
 	// Wire readiness checker
 	if a.controller != nil && a.metrics != nil {
 		a.metrics.SetReadyChecker(a.controller.HasSynced)
@@ -51,6 +54,15 @@ func (a *App) Start(ctx context.Context) error {
 	// Initialize leadership state on metrics
 	if a.metrics != nil && a.leaderElection != nil {
 		a.metrics.SetLeader(a.leaderElection.IsLeader())
+	}
+
+	// Start informers immediately so cache warms up and /readyz becomes ready across all replicas
+	if a.controller != nil {
+		go func() {
+			if err := a.controller.StartInformers(appCtx); err != nil && appCtx.Err() == nil {
+				a.logger.Error("Failed to start informers", logging_ports.Field{Key: "error", Value: err})
+			}
+		}()
 	}
 
 	// Start metrics server if enabled
@@ -64,42 +76,39 @@ func (a *App) Start(ctx context.Context) error {
 
 	// Set leader election callbacks
 	a.leaderElection.SetCallbacks(leaderelection.Callbacks{
-		OnStartedLeading: func(ctx context.Context) {
+		OnStartedLeading: func(leadingCtx context.Context) {
 			a.logger.Info("Started leading, initializing controller")
 			if a.metrics != nil {
 				a.metrics.SetLeader(true)
 			}
 			// Start controller for leader
 			go func() {
-				if err := a.controller.Start(ctx); err != nil {
+				if err := a.controller.Start(leadingCtx); err != nil {
 					a.logger.Error("Controller failed",
 						logging_ports.Field{Key: "error", Value: err})
 				}
 			}()
-			// Initial sync when becoming leader (requirement 11)
-			if err := a.controller.SyncUpstreams(ctx); err != nil {
-				a.logger.Error("Initial upstream sync failed",
-					logging_ports.Field{Key: "error", Value: err})
-			}
 		},
 		OnStoppedLeading: func() {
 			a.logger.Info("Stopped leading, shutting down controller")
 			if a.metrics != nil {
 				a.metrics.SetLeader(false)
 			}
-			// No explicit controller cleanup needed, as context cancellation handles it
+			// Trigger exit so kubelet restarts the pod
+			cancel()
 		},
 	})
 
 	// Start leader election
 	go func() {
-		if err := a.leaderElection.Run(ctx); err != nil {
+		if err := a.leaderElection.Run(appCtx); err != nil {
 			a.logger.Error("Leader election failed", logging_ports.Field{Key: "error", Value: err})
+			cancel()
 		}
 	}()
 
-	// Block until context is cancelled (signal handled by main.go)
-	<-ctx.Done()
+	// Block until context is cancelled (signal handled by main.go or leadership lost)
+	<-appCtx.Done()
 	a.logger.Info("Context canceled, stopping application")
 	return nil
 }

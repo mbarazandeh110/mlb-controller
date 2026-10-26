@@ -168,10 +168,20 @@ func (f *fakeController) Start(ctx context.Context) error {
 	f.mu.Lock()
 	f.started = true
 	startErr := f.startErr
+	syncErr := f.syncErr
 	f.mu.Unlock()
+
+	if syncErr != nil {
+		return syncErr
+	}
+	_ = f.SyncUpstreams(ctx)
 
 	<-ctx.Done()
 	return startErr
+}
+
+func (f *fakeController) StartInformers(ctx context.Context) error {
+	return nil
 }
 
 func (f *fakeController) SyncUpstreams(ctx context.Context) error {
@@ -398,7 +408,7 @@ func TestApp_LeaderElection_SyncUpstreamsError(t *testing.T) {
 	_ = app.Start(ctx)
 
 	require.Eventually(t, func() bool {
-		return logger.HasMessage("Initial upstream sync failed")
+		return logger.HasMessage("Controller failed")
 	}, 1*time.Second, 10*time.Millisecond)
 }
 

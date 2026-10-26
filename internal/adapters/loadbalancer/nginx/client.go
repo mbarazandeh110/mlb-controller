@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,7 +70,7 @@ func NewNginxClientSet(ngx config.NginxConfig) ([]*NginxClient, error) {
 
 	var clients []*NginxClient
 	for _, addr := range ngx.GetAddresses() {
-		baseURL := fmt.Sprintf("%s://%s:%d", ngx.Protocol, addr.IP, addr.Port)
+		baseURL := fmt.Sprintf("%s://%s", ngx.Protocol, net.JoinHostPort(addr.IP, strconv.Itoa(addr.Port)))
 		client := &http.Client{
 			Transport: transport,
 			Timeout:   ngx.RequestTimeout,
@@ -105,7 +106,7 @@ func (c *NginxClient) doRequest(ctx context.Context, method, path string) ([]byt
 		resp, err = c.client.Do(req)
 		if err == nil && resp.StatusCode == 200 {
 			defer resp.Body.Close()
-			bodyBytes, err := io.ReadAll(resp.Body)
+			bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 10*1024*1024))
 			if err != nil {
 				return nil, fmt.Errorf("failed to read response body: %w", err)
 			}
@@ -113,7 +114,7 @@ func (c *NginxClient) doRequest(ctx context.Context, method, path string) ([]byt
 		}
 
 		if resp != nil {
-			body, _ := io.ReadAll(resp.Body)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 			resp.Body.Close()
 			lastErr = fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
 

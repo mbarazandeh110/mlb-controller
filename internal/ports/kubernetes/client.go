@@ -8,6 +8,9 @@ import (
 
 // KubernetesPort defines the interface for interacting with Kubernetes resources.
 type KubernetesPort interface {
+	// Start starts the underlying informers and waits for caches to synchronize.
+	Start(ctx context.Context) error
+
 	// WatchServices watches Kubernetes Services with specific labels and sends events to the provided channel.
 	WatchServices(ctx context.Context, labels map[string]string, events chan<- ServiceEvent) error
 
@@ -22,6 +25,12 @@ type KubernetesPort interface {
 
 	// GetNodeByName retrieves a Node by its name.
 	GetNodeByName(ctx context.Context, name string) (model.Node, error)
+
+	// GetService retrieves a single MLB Service by namespace and name from the cache.
+	GetService(namespace, name string) (*model.Service, error)
+
+	// ListServices lists all MLB Services from the cache.
+	ListServices() ([]model.Service, error)
 
 	// HasSynced returns true if the informer caches have synchronized.
 	HasSynced() bool

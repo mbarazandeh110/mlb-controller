@@ -79,11 +79,12 @@ func (k *KubernetesLeaderElection) Run(ctx context.Context) error {
 		return nil
 	}
 
-	// Get pod identity (use hostname as ID)
-	id, err := os.Hostname()
+	// Get pod identity (use hostname + timestamp as unique ID)
+	host, err := os.Hostname()
 	if err != nil {
-		return fmt.Errorf("failed to get hostname: %w", err)
+		host = "mlb-controller"
 	}
+	id := fmt.Sprintf("%s_%d", host, time.Now().UnixNano())
 
 	// Create resource lock
 	lock := &resourcelock.LeaseLock{
@@ -99,10 +100,11 @@ func (k *KubernetesLeaderElection) Run(ctx context.Context) error {
 
 	// Set up leader election config
 	leConfig := k8sleaderelection.LeaderElectionConfig{
-		Lock:          lock,
-		LeaseDuration: k.config.LeaseDuration,
-		RenewDeadline: k.config.RenewDeadline,
-		RetryPeriod:   k.config.RetryPeriod,
+		Lock:            lock,
+		LeaseDuration:   k.config.LeaseDuration,
+		RenewDeadline:   k.config.RenewDeadline,
+		RetryPeriod:     k.config.RetryPeriod,
+		ReleaseOnCancel: true,
 		Callbacks: k8sleaderelection.LeaderCallbacks{
 			OnStartedLeading: func(ctx context.Context) {
 				k.logger.Info("Became leader", logging_ports.Field{Key: "id", Value: id})
@@ -135,9 +137,11 @@ func (k *KubernetesLeaderElection) Run(ctx context.Context) error {
 		return fmt.Errorf("failed to create leader elector: %w", err)
 	}
 
-	go leaderElector.Run(ctx)
-	<-ctx.Done()
-	return nil
+	leaderElector.Run(ctx)
+	if ctx.Err() != nil {
+		return nil
+	}
+	return fmt.Errorf("leader election lease lost")
 }
 
 // IsLeader returns true if the current instance is the leader.

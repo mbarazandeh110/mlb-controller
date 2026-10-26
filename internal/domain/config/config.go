@@ -14,4 +14,5 @@ type Config struct {
 	GlobalIPReplacementList  GlobalIPReplacementList `mapstructure:"global_ip_replacement_list"`
 	LoadBalancers            LoadBalancersConfig     `mapstructure:"loadbalancers"`
 	RequestPoolSize          int                     `mapstructure:"request_pool_size"` // Maximum concurrent requests to load balancers
+	AllowEmptyUpstream       bool                    `mapstructure:"allow_empty_upstream"`
 }

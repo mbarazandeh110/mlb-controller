@@ -54,18 +54,29 @@ func ApplyIPReplacement(nodeIP string, lbConfig config.LoadBalancerConfig, globa
 }
 
 func isIPInNet(ip, netIP string, mask int) bool {
-	_, cidrNet, _ := net.ParseCIDR(netIP + "/" + fmt.Sprint(mask))
-	return cidrNet.Contains(net.ParseIP(ip))
+	parsedIP := net.ParseIP(ip)
+	if parsedIP == nil {
+		return false
+	}
+	_, cidrNet, err := net.ParseCIDR(fmt.Sprintf("%s/%d", netIP, mask))
+	if err != nil || cidrNet == nil {
+		return false
+	}
+	return cidrNet.Contains(parsedIP)
 }
 
 func replaceInNet(ipStr, sourceNetStr, targetNetStr string, mask int) string {
 	ip := net.ParseIP(ipStr)
 	src := net.ParseIP(sourceNetStr)
 	dst := net.ParseIP(targetNetStr)
+	if ip == nil || src == nil || dst == nil {
+		return ipStr
+	}
 
-	// Detect IPv4 vs IPv6 and normalize to 4 or 16 bytes accordingly
-	if ipv4 := ip.To4(); ipv4 != nil {
-		ip = ipv4
+	// Detect IPv4 vs IPv6 and normalize accordingly
+	isIPv4 := ip.To4() != nil && src.To4() != nil && dst.To4() != nil
+	if isIPv4 {
+		ip = ip.To4()
 		src = src.To4()
 		dst = dst.To4()
 	} else {
@@ -75,11 +86,18 @@ func replaceInNet(ipStr, sourceNetStr, targetNetStr string, mask int) string {
 	}
 
 	totalBits := 32
-	if len(ip) != 4 {
+	if !isIPv4 {
 		totalBits = 128
 	}
 
+	if mask < 0 || mask > totalBits {
+		return ipStr
+	}
+
 	maskBytes := net.CIDRMask(mask, totalBits)
+	if maskBytes == nil || len(maskBytes) != len(ip) || len(dst) != len(ip) {
+		return ipStr
+	}
 
 	host := make([]byte, len(ip))
 	for i := range ip {

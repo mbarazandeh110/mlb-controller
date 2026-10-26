@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -118,12 +120,19 @@ func (f *fakeLBAdapter) GetAllUpstreams() map[string]model.Upstream {
 
 type fakeK8sPort struct {
 	mu           sync.Mutex
+	services     map[string]*model.Service
 	pods         []model.Pod
 	nodes        map[string]model.Node
 	podError     error
+	nodeError    error
+	notSynced    bool
 	svcEventsCh  chan<- kubernetes.ServiceEvent
 	podEventsCh  chan<- kubernetes.PodEvent
 	nodeEventsCh chan<- kubernetes.NodeEvent
+}
+
+func (f *fakeK8sPort) Start(ctx context.Context) error {
+	return nil
 }
 
 func (f *fakeK8sPort) WatchServices(ctx context.Context, requiredLabels map[string]string, events chan<- kubernetes.ServiceEvent) error {
@@ -162,6 +171,9 @@ func (f *fakeK8sPort) GetPodsForSelector(ctx context.Context, namespace string, 
 func (f *fakeK8sPort) GetNodeByName(ctx context.Context, name string) (model.Node, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.nodeError != nil {
+		return model.Node{}, f.nodeError
+	}
 	node, exists := f.nodes[name]
 	if !exists {
 		return model.Node{Name: name, InternalIP: "192.168.1.100"}, nil
@@ -169,8 +181,52 @@ func (f *fakeK8sPort) GetNodeByName(ctx context.Context, name string) (model.Nod
 	return node, nil
 }
 
+func (f *fakeK8sPort) GetService(namespace, name string) (*model.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := namespace + "/" + name
+	if f.services != nil {
+		if svc, ok := f.services[key]; ok && svc != nil {
+			return svc, nil
+		}
+	}
+	return nil, fmt.Errorf("service not found: %s", key)
+}
+
+func (f *fakeK8sPort) ListServices() ([]model.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var res []model.Service
+	for _, svc := range f.services {
+		if svc != nil {
+			res = append(res, *svc)
+		}
+	}
+	return res, nil
+}
+
+func (f *fakeK8sPort) SetService(svc model.Service) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.services == nil {
+		f.services = make(map[string]*model.Service)
+	}
+	s := svc
+	f.services[svc.Namespace+"/"+svc.Name] = &s
+}
+
+func (f *fakeK8sPort) DeleteService(namespace, name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.services != nil {
+		delete(f.services, namespace+"/"+name)
+	}
+}
+
 func (f *fakeK8sPort) HasSynced() bool {
-	return true
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.notSynced
 }
 
 func setupTestController(t *testing.T) (*ControllerImpl, *fakeLBAdapter, *fakeK8sPort, *fakeMetrics) {
@@ -198,6 +254,7 @@ func setupTestController(t *testing.T) (*ControllerImpl, *fakeLBAdapter, *fakeK8
 			"node1": {Name: "node1", InternalIP: "192.168.1.10"},
 			"node2": {Name: "node2", InternalIP: "192.168.1.20"},
 		},
+		services: make(map[string]*model.Service),
 	}
 	metricsPort := newFakeMetrics()
 	logger := &fakeLogger{}
@@ -304,6 +361,7 @@ func TestController_ImmediateUpstreamCleanupOnServiceDelete(t *testing.T) {
 	}
 
 	key := "default/test-svc"
+	k8sPort.SetService(svc)
 
 	// 1. Add event
 	ctrl.handleServiceEvent(kubernetes.ServiceEvent{
@@ -320,6 +378,7 @@ func TestController_ImmediateUpstreamCleanupOnServiceDelete(t *testing.T) {
 	assert.Contains(t, state.Upstreams, "test-lb/test-upstream")
 
 	// 2. Delete event
+	k8sPort.DeleteService("default", "test-svc")
 	ctrl.handleServiceEvent(kubernetes.ServiceEvent{
 		Type:    kubernetes.EventTypeDelete,
 		Service: svc,
@@ -379,12 +438,15 @@ func TestController_ServiceDeletion_SharedUpstream(t *testing.T) {
 	}
 
 	// Add both services
+	k8sPort.SetService(svc1)
+	k8sPort.SetService(svc2)
 	ctrl.handleServiceEvent(kubernetes.ServiceEvent{Type: kubernetes.EventTypeAdd, Service: svc1})
 	ctrl.handleServiceEvent(kubernetes.ServiceEvent{Type: kubernetes.EventTypeAdd, Service: svc2})
 	_ = ctrl.syncHandler(ctx, "default/svc-1")
 	_ = ctrl.syncHandler(ctx, "default/svc-2")
 
 	// Delete svc1
+	k8sPort.DeleteService("default", "svc-1")
 	ctrl.handleServiceEvent(kubernetes.ServiceEvent{Type: kubernetes.EventTypeDelete, Service: svc1})
 	err := ctrl.syncHandler(ctx, "default/svc-1")
 	require.NoError(t, err)
@@ -440,6 +502,7 @@ func TestController_SyncUpstreams_BulkSync(t *testing.T) {
 	ctrl.stateMutex.Lock()
 	ctrl.state.Services["default/test-svc"] = svc
 	ctrl.stateMutex.Unlock()
+	k8sPort.SetService(svc)
 
 	err := ctrl.SyncUpstreams(ctx)
 	require.NoError(t, err)
@@ -533,6 +596,7 @@ func TestController_IPReplacementIntegration(t *testing.T) {
 		pods: []model.Pod{
 			{Name: "pod-1", Ready: true, NodeName: "node1"},
 		},
+		services: make(map[string]*model.Service),
 	}
 	ctrl := NewController(k8sPort, &fakeLogger{}, newFakeMetrics(), lbMap, cfg)
 
@@ -573,6 +637,7 @@ func TestController_ReactivePodEvent(t *testing.T) {
 	}
 
 	// Register service in state
+	k8sPort.SetService(svc)
 	ctrl.stateMutex.Lock()
 	ctrl.state.Services["default/reactive-svc"] = svc
 	ctrl.lastKnownServices["default/reactive-svc"] = svc
@@ -630,6 +695,7 @@ func TestController_ReactiveNodeEvent(t *testing.T) {
 		Labels:    map[string]string{"app": "node-test"},
 	}
 
+	k8sPort.SetService(svc)
 	ctrl.stateMutex.Lock()
 	ctrl.state.Services["default/reactive-node-svc"] = svc
 	ctrl.lastKnownServices["default/reactive-node-svc"] = svc
@@ -693,6 +759,7 @@ func TestController_Start_And_WorkerLifecycle(t *testing.T) {
 	}, 1*time.Second, 10*time.Millisecond)
 
 	// Send service event
+	k8sPort.SetService(svc)
 	k8sPort.mu.Lock()
 	svcCh := k8sPort.svcEventsCh
 	k8sPort.mu.Unlock()
@@ -738,8 +805,9 @@ func TestController_RunPeriodicSync(t *testing.T) {
 	}
 
 	k8sPort := &fakeK8sPort{
-		nodes: map[string]model.Node{"node1": {Name: "node1", InternalIP: "192.168.1.10"}},
-		pods:  []model.Pod{{Name: "p1", Ready: true, NodeName: "node1"}},
+		nodes:    map[string]model.Node{"node1": {Name: "node1", InternalIP: "192.168.1.10"}},
+		pods:     []model.Pod{{Name: "p1", Ready: true, NodeName: "node1"}},
+		services: make(map[string]*model.Service),
 	}
 
 	ctrl := NewController(k8sPort, &fakeLogger{}, newFakeMetrics(), lbMap, cfg)
@@ -756,6 +824,7 @@ func TestController_RunPeriodicSync(t *testing.T) {
 		Selector: map[string]string{"app": "periodic"},
 	}
 
+	k8sPort.SetService(svc)
 	ctrl.stateMutex.Lock()
 	ctrl.state.Services["default/periodic-svc"] = svc
 	ctrl.stateMutex.Unlock()
@@ -770,4 +839,96 @@ func TestController_RunPeriodicSync(t *testing.T) {
 		all := lbAdapter.GetAllUpstreams()
 		return len(all) > 0 && all["periodic-upstream"].Name == "periodic-upstream"
 	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestController_FailStatic_PodLookupError(t *testing.T) {
+	ctrl, lbAdapter, k8sPort, metricsPort := setupTestController(t)
+	ctx := context.Background()
+
+	svc := model.Service{
+		Name:      "failstatic-svc",
+		Namespace: "default",
+		Labels: map[string]string{
+			"mlb-loadbalancer-name": "test-lb",
+			"mlb-upstream-name":     "failstatic-upstream",
+			"mlb-port":              "30080",
+		},
+		NodePort: 30080,
+		Selector: map[string]string{"app": "failstatic"},
+	}
+
+	k8sPort.podError = errors.New("API server connectivity lost")
+
+	err := ctrl.syncUpstreamsForService(ctx, svc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to get pods")
+
+	// Fail-Static: Load balancer should NOT have been touched
+	synced := lbAdapter.GetSyncedUpstreams()
+	assert.Empty(t, synced, "LB must NOT be updated when pod lookup fails (Fail-Static)")
+
+	metricsPort.mu.Lock()
+	assert.Equal(t, 1, metricsPort.syncErrors["failstatic-upstream"])
+	metricsPort.mu.Unlock()
+}
+
+func TestController_FailStatic_NodeLookupError(t *testing.T) {
+	ctrl, lbAdapter, k8sPort, metricsPort := setupTestController(t)
+	ctx := context.Background()
+
+	svc := model.Service{
+		Name:      "failstatic-node-svc",
+		Namespace: "default",
+		Labels: map[string]string{
+			"mlb-loadbalancer-name": "test-lb",
+			"mlb-upstream-name":     "failstatic-node-upstream",
+			"mlb-port":              "30080",
+		},
+		NodePort: 30080,
+		Selector: map[string]string{"app": "failstatic"},
+	}
+
+	k8sPort.pods = []model.Pod{
+		{Name: "pod-1", Ready: true, NodeName: "node-failing"},
+	}
+	k8sPort.nodeError = errors.New("node not found in cluster")
+
+	err := ctrl.syncUpstreamsForService(ctx, svc)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failed to build upstream")
+
+	// Fail-Static: LB must NOT be updated with 0 backends
+	synced := lbAdapter.GetSyncedUpstreams()
+	assert.Empty(t, synced, "LB must NOT be updated when node lookup fails (Fail-Static)")
+
+	metricsPort.mu.Lock()
+	assert.Equal(t, 1, metricsPort.syncErrors["failstatic-node-upstream"])
+	metricsPort.mu.Unlock()
+}
+
+func TestController_HasSynced_Guard(t *testing.T) {
+	ctrl, lbAdapter, k8sPort, _ := setupTestController(t)
+	ctx := context.Background()
+
+	svc := model.Service{
+		Name:      "guard-svc",
+		Namespace: "default",
+		Labels: map[string]string{
+			"mlb-loadbalancer-name": "test-lb",
+			"mlb-upstream-name":     "guard-upstream",
+			"mlb-port":              "30080",
+		},
+		NodePort: 30080,
+	}
+
+	k8sPort.SetService(svc)
+	k8sPort.mu.Lock()
+	k8sPort.notSynced = true
+	k8sPort.mu.Unlock()
+
+	err := ctrl.SyncUpstreams(ctx)
+	require.NoError(t, err)
+
+	all := lbAdapter.GetAllUpstreams()
+	assert.Empty(t, all, "SyncUpstreams must be skipped when informers have not synced")
 }

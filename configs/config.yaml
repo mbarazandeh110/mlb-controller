@@ -64,6 +64,8 @@ loadbalancers:
     request_pool_size: 22
     name: CDN # must be unique across all load balancers
     ip_replacement: true # default false
+    prune_orphans: false # default false - if true, removes unmanaged upstreams during periodic bulk drift reconciliation
+    allow_empty_upstream: false # default false - safety net preventing wiping all backends when desired backends == 0
     update_period: 1s # default 1s
     protocol: http
     # cert_path: "certs/example.test.crt"

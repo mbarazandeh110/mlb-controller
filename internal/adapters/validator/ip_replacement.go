@@ -2,6 +2,8 @@ package validator
 
 import (
 	"fmt"
+	"net"
+
 	"mlb-controller/internal/domain/config"
 	"mlb-controller/internal/util"
 )
@@ -32,15 +34,19 @@ func (v *GlobalIPReplacementValidator) Validate(cfg *config.Config) error {
 	}
 
 	// Validate nets
-	for _, net := range cfg.GlobalIPReplacementList.Net {
-		for i, n := range net.Nets {
+	for _, netConf := range cfg.GlobalIPReplacementList.Net {
+		for i, n := range netConf.Nets {
 			if !util.IsValidIP(n.Source) || !util.IsValidIP(n.Target) {
 				return fmt.Errorf("invalid IP in global_ip_replacement_list.net: source=%s, target=%s", n.Source, n.Target)
 			}
-			if n.Mask < 0 || n.Mask > 32 {
-				return fmt.Errorf("global_ip_replacement_list.net.mask must be between 0 and 32")
+			maxMask := 32
+			if parsed := net.ParseIP(n.Source); parsed != nil && parsed.To4() == nil {
+				maxMask = 128
 			}
-			for j, n2 := range net.Nets {
+			if n.Mask < 0 || n.Mask > maxMask {
+				return fmt.Errorf("global_ip_replacement_list.net.mask must be between 0 and %d", maxMask)
+			}
+			for j, n2 := range netConf.Nets {
 				if i == j {
 					continue
 				}

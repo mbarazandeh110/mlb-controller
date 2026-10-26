@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -94,6 +95,31 @@ func (f *fakeKubernetes) GetNodeByName(ctx context.Context, name string) (model.
 		return model.Node{}, nil // Simulate not found
 	}
 	return node, nil
+}
+
+func (f *fakeKubernetes) Start(ctx context.Context) error {
+	return nil
+}
+
+func (f *fakeKubernetes) GetService(namespace, name string) (*model.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := fmt.Sprintf("%s/%s", namespace, name)
+	svc, exists := f.services[key]
+	if !exists {
+		return nil, fmt.Errorf("service not found: %s", key)
+	}
+	return &svc, nil
+}
+
+func (f *fakeKubernetes) ListServices() ([]model.Service, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var result []model.Service
+	for _, svc := range f.services {
+		result = append(result, svc)
+	}
+	return result, nil
 }
 
 func (f *fakeKubernetes) HasSynced() bool {

@@ -27,5 +27,11 @@ func (v *LeaderElectionValidator) Validate(cfg *config.Config) error {
 	if cfg.LeaderElection.RetryPeriod <= 0 {
 		return fmt.Errorf("leader_election.retry_period must be positive")
 	}
+	if cfg.LeaderElection.LeaseDuration <= cfg.LeaderElection.RenewDeadline {
+		return fmt.Errorf("leader_election.lease_duration (%v) must be greater than renew_deadline (%v)", cfg.LeaderElection.LeaseDuration, cfg.LeaderElection.RenewDeadline)
+	}
+	if cfg.LeaderElection.RenewDeadline <= cfg.LeaderElection.RetryPeriod {
+		return fmt.Errorf("leader_election.renew_deadline (%v) must be greater than retry_period (%v)", cfg.LeaderElection.RenewDeadline, cfg.LeaderElection.RetryPeriod)
+	}
 	return nil
 }
