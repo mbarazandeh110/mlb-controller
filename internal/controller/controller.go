@@ -176,6 +176,28 @@ func (c *ControllerImpl) syncHandler(ctx context.Context, key string) error {
 		return nil
 	}
 
+	c.stateMutex.RLock()
+	lastSvc, hadLast := c.lastKnownServices[key]
+	c.stateMutex.RUnlock()
+
+	if hadLast {
+		oldLB := lastSvc.Labels["mlb-loadbalancer-name"]
+		oldUp := lastSvc.Labels["mlb-upstream-name"]
+		newLB := svc.Labels["mlb-loadbalancer-name"]
+		newUp := svc.Labels["mlb-upstream-name"]
+
+		if (oldLB != newLB || oldUp != newUp) && (oldLB != "" && oldUp != "") {
+			// Upstream or LB changed for this service. Drain the old upstream!
+			if err := c.handleServiceDeletion(ctx, key, lastSvc); err != nil {
+				c.logger.Error("Failed to cleanup old upstream on service label change",
+					logging.Field{Key: "key", Value: key},
+					logging.Field{Key: "old_lb", Value: oldLB},
+					logging.Field{Key: "old_upstream", Value: oldUp},
+					logging.Field{Key: "error", Value: err})
+			}
+		}
+	}
+
 	c.stateMutex.Lock()
 	c.lastKnownServices[key] = *svc
 	c.state.Services[key] = *svc
@@ -254,9 +276,15 @@ func (c *ControllerImpl) handleServiceEvent(event kubernetes.ServiceEvent) {
 	key := fmt.Sprintf("%s/%s", event.Service.Namespace, event.Service.Name)
 	c.stateMutex.Lock()
 	switch event.Type {
-	case kubernetes.EventTypeAdd, kubernetes.EventTypeUpdate:
+	case kubernetes.EventTypeAdd:
 		c.state.Services[key] = event.Service
-		c.lastKnownServices[key] = event.Service
+		if _, exists := c.lastKnownServices[key]; !exists {
+			c.lastKnownServices[key] = event.Service
+		}
+	case kubernetes.EventTypeUpdate:
+		c.state.Services[key] = event.Service
+		// Note: We deliberately do not overwrite c.lastKnownServices[key] here
+		// so that syncHandler can detect differences (LB, upstream name changes) between previous and current state.
 	case kubernetes.EventTypeDelete:
 		delete(c.state.Services, key)
 	}
@@ -268,6 +296,7 @@ func (c *ControllerImpl) handleServiceEvent(event kubernetes.ServiceEvent) {
 func (c *ControllerImpl) handlePodEvent(event kubernetes.PodEvent) {
 	key := fmt.Sprintf("%s/%s", event.Pod.Namespace, event.Pod.Name)
 	c.stateMutex.Lock()
+	oldPod, hadOldPod := c.state.Pods[key]
 	switch event.Type {
 	case kubernetes.EventTypeAdd, kubernetes.EventTypeUpdate:
 		c.state.Pods[key] = event.Pod
@@ -276,6 +305,9 @@ func (c *ControllerImpl) handlePodEvent(event kubernetes.PodEvent) {
 	}
 	c.stateMutex.Unlock()
 
+	if hadOldPod && event.Type == kubernetes.EventTypeUpdate {
+		c.enqueueUpstreamsForPod(oldPod)
+	}
 	c.enqueueUpstreamsForPod(event.Pod)
 }
 
@@ -297,7 +329,7 @@ func (c *ControllerImpl) enqueueUpstreamsForPod(pod model.Pod) {
 	c.stateMutex.RLock()
 	defer c.stateMutex.RUnlock()
 	for _, svc := range c.state.Services {
-		if c.matchLabels(pod.Labels, svc.Selector) {
+		if svc.Namespace == pod.Namespace && c.matchLabels(pod.Labels, svc.Selector) {
 			c.queue.Add(fmt.Sprintf("%s/%s", svc.Namespace, svc.Name))
 		}
 	}
@@ -361,6 +393,49 @@ func (c *ControllerImpl) syncUpstreamsForService(ctx context.Context, svc model.
 		}
 	}
 
+	lbConfig, _ := c.getLoadBalancerConfig(lbName)
+
+	// Check if backends is empty (no pods or no ready pods)
+	if len(upstream.Backends) == 0 {
+		var defBackend *config.DefaultBackendConfig
+		if lbConfig != nil && lbConfig.GetDefaultBackend() != nil {
+			defBackend = lbConfig.GetDefaultBackend()
+		} else if c.config.DefaultBackend != nil {
+			defBackend = c.config.DefaultBackend
+		}
+
+		if defBackend != nil && defBackend.IP != "" {
+			w := defBackend.Weight
+			if w <= 0 {
+				w = 1
+			}
+			upstream.Backends = []model.Backend{
+				{
+					IP:     defBackend.IP,
+					Port:   defBackend.Port,
+					Weight: w,
+				},
+			}
+			c.logger.Info("Using fallback default backend because no ready pods were found",
+				logging.Field{Key: "service", Value: fmt.Sprintf("%s/%s", svc.Namespace, svc.Name)},
+				logging.Field{Key: "upstream", Value: upstreamName},
+				logging.Field{Key: "default_ip", Value: defBackend.IP},
+				logging.Field{Key: "default_port", Value: defBackend.Port})
+		} else {
+			allowEmpty := c.config.AllowEmptyUpstream
+			if lbConfig != nil && lbConfig.GetAllowEmptyUpstream() {
+				allowEmpty = true
+			}
+			if !allowEmpty {
+				c.logger.Warn("Safety Net triggered: no ready pods found and allow_empty_upstream is false; preserving existing backends",
+					logging.Field{Key: "service", Value: fmt.Sprintf("%s/%s", svc.Namespace, svc.Name)},
+					logging.Field{Key: "upstream", Value: upstreamName},
+					logging.Field{Key: "loadbalancer", Value: lbName})
+				return nil
+			}
+		}
+	}
+
 	c.metrics.UpdateBackendsTotal(upstreamName, float64(len(upstream.Backends)))
 
 	key := fmt.Sprintf("%s/%s", lbName, upstreamName)
@@ -378,99 +453,179 @@ func (c *ControllerImpl) syncUpstreamsForService(ctx context.Context, svc model.
 	return nil
 }
 
-// اجرای مستقیم Two-Way Reconciliation در بازه‌های زمانی ثابت
+// اجرای مستقیم Two-Way Reconciliation در بازه‌های زمانی اختصاصی یا سراسری
 func (c *ControllerImpl) runPeriodicSync(ctx context.Context) {
-	if c.syncTicker == nil {
-		c.syncTicker = time.NewTicker(c.config.GlobalUpstreamSyncPeriod)
-	}
-	for {
-		select {
-		case <-c.syncTicker.C:
-			if err := c.SyncUpstreams(ctx); err != nil {
-				c.logger.Error("Periodic drift reconciliation failed", logging.Field{Key: "error", Value: err})
+	if len(c.loadBalancers) == 0 {
+		ticker := time.NewTicker(c.config.GlobalUpstreamSyncPeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := c.SyncUpstreams(ctx); err != nil {
+					c.logger.Error("Periodic drift reconciliation failed", logging.Field{Key: "error", Value: err})
+				}
+			case <-c.syncStop:
+				return
+			case <-ctx.Done():
+				return
 			}
-		case <-c.syncStop:
-			return
-		case <-ctx.Done():
-			return
 		}
 	}
+
+	var wg sync.WaitGroup
+	for lbName, adapter := range c.loadBalancers {
+		period := c.config.GlobalUpstreamSyncPeriod
+		if lbConfig, ok := c.getLoadBalancerConfig(lbName); ok && lbConfig.GetUpstreamSyncPeriod() > 0 {
+			period = lbConfig.GetUpstreamSyncPeriod()
+		}
+		if period <= 0 {
+			period = 30 * time.Second
+		}
+
+		wg.Add(1)
+		go func(name string, ad loadbalancer.LoadBalancerAdapter, p time.Duration) {
+			defer wg.Done()
+			ticker := time.NewTicker(p)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-ticker.C:
+					if err := c.syncSingleLoadBalancer(ctx, name, ad); err != nil {
+						c.logger.Error("Periodic drift reconciliation failed for load balancer",
+							logging.Field{Key: "loadbalancer", Value: name},
+							logging.Field{Key: "error", Value: err})
+					}
+				case <-c.syncStop:
+					return
+				case <-ctx.Done():
+					return
+				}
+			}
+		}(lbName, adapter, period)
+	}
+	wg.Wait()
 }
 
-// نگاشت کامل State مطلوب K8s و ارسال به لودبالانسرها جهت حذف Stateهای Drift شده
-func (c *ControllerImpl) SyncUpstreams(ctx context.Context) error {
+func (c *ControllerImpl) syncSingleLoadBalancer(ctx context.Context, lbName string, adapter loadbalancer.LoadBalancerAdapter) error {
 	startTime := time.Now()
 
 	if !c.HasSynced() {
-		c.logger.Warn("Skipping SyncUpstreams because informer caches are not yet synchronized")
+		c.logger.Warn("Skipping sync because informer caches are not yet synchronized",
+			logging.Field{Key: "loadbalancer", Value: lbName})
 		return nil
 	}
 
 	services, err := c.k8sClient.ListServices()
 	if err != nil {
-		return fmt.Errorf("failed to list services from lister: %w", err)
+		return fmt.Errorf("failed to list services from lister for LB %s: %w", lbName, err)
 	}
 
-	desiredState := make(map[string]map[string]model.Upstream)
-	for lbName := range c.loadBalancers {
-		desiredState[lbName] = make(map[string]model.Upstream)
-	}
+	desiredState := make(map[string]model.Upstream)
 
 	for _, svc := range services {
-		lbName := svc.Labels["mlb-loadbalancer-name"]
-		if lbName == "" {
+		if svc.Labels["mlb-loadbalancer-name"] != lbName {
 			continue
 		}
 
 		pods, err := c.k8sClient.GetPodsForSelector(ctx, svc.Namespace, svc.Selector)
 		if err != nil {
-			c.logger.Error("Failed to list pods for bulk reconciliation", logging.Field{Key: "service", Value: svc.Name}, logging.Field{Key: "error", Value: err})
+			c.logger.Error("Failed to list pods for reconciliation",
+				logging.Field{Key: "service", Value: svc.Name},
+				logging.Field{Key: "error", Value: err})
 			continue
 		}
 
 		upstream, err := c.buildUpstream(ctx, svc, pods)
 		if err != nil {
-			c.logger.Error("Failed to build upstream for bulk reconciliation", logging.Field{Key: "service", Value: svc.Name}, logging.Field{Key: "error", Value: err})
+			c.logger.Error("Failed to build upstream for reconciliation",
+				logging.Field{Key: "service", Value: svc.Name},
+				logging.Field{Key: "error", Value: err})
 			continue
 		}
 		if upstream == nil {
 			continue
 		}
 
-		if _, exists := desiredState[lbName]; !exists {
-			desiredState[lbName] = make(map[string]model.Upstream)
-		}
-
-		if existingUp, exists := desiredState[lbName][upstream.Name]; exists {
+		if existingUp, exists := desiredState[upstream.Name]; exists {
 			existingUp.Backends = c.mergeBackends(existingUp.Backends, upstream.Backends)
-			desiredState[lbName][upstream.Name] = existingUp
+			desiredState[upstream.Name] = existingUp
 		} else {
-			desiredState[lbName][upstream.Name] = *upstream
+			desiredState[upstream.Name] = *upstream
 		}
 	}
 
-	// بروزرسانی Cache کنترلر
-	c.stateMutex.Lock()
-	c.state.Upstreams = make(map[string]model.Upstream)
-	for lbName, upstreams := range desiredState {
-		for upName, up := range upstreams {
-			c.state.Upstreams[fmt.Sprintf("%s/%s", lbName, upName)] = up
+	lbConfig, _ := c.getLoadBalancerConfig(lbName)
+
+	// Apply fallback default backend or safety net for upstreams with zero backends
+	for upName, up := range desiredState {
+		if len(up.Backends) == 0 {
+			var defBackend *config.DefaultBackendConfig
+			if lbConfig != nil && lbConfig.GetDefaultBackend() != nil {
+				defBackend = lbConfig.GetDefaultBackend()
+			} else if c.config.DefaultBackend != nil {
+				defBackend = c.config.DefaultBackend
+			}
+
+			if defBackend != nil && defBackend.IP != "" {
+				w := defBackend.Weight
+				if w <= 0 {
+					w = 1
+				}
+				up.Backends = []model.Backend{
+					{
+						IP:     defBackend.IP,
+						Port:   defBackend.Port,
+						Weight: w,
+					},
+				}
+				desiredState[upName] = up
+			} else {
+				allowEmpty := c.config.AllowEmptyUpstream
+				if lbConfig != nil && lbConfig.GetAllowEmptyUpstream() {
+					allowEmpty = true
+				}
+				if !allowEmpty {
+					// Safety net: preserve existing state from c.state if present
+					c.stateMutex.RLock()
+					oldUp, exists := c.state.Upstreams[fmt.Sprintf("%s/%s", lbName, upName)]
+					c.stateMutex.RUnlock()
+					if exists && len(oldUp.Backends) > 0 {
+						desiredState[upName] = oldUp
+					}
+				}
+			}
 		}
+	}
+
+	// Update c.state.Upstreams and metrics
+	c.stateMutex.Lock()
+	for upName, up := range desiredState {
+		c.state.Upstreams[fmt.Sprintf("%s/%s", lbName, upName)] = up
+		c.metrics.UpdateBackendsTotal(upName, float64(len(up.Backends)))
 	}
 	c.stateMutex.Unlock()
 
-	var errs []error
-	for lbName, adapter := range c.loadBalancers {
-		if err := adapter.SyncAllUpstreams(ctx, desiredState[lbName]); err != nil {
-			errs = append(errs, fmt.Errorf("reconciliation failed for LB %s: %w", lbName, err))
-		}
+	if err := adapter.SyncAllUpstreams(ctx, desiredState); err != nil {
+		c.metrics.IncrementSyncErrors(lbName)
+		return fmt.Errorf("reconciliation failed for LB %s: %w", lbName, err)
 	}
 
 	c.syncUpstreamCtr.Inc()
-	c.metrics.ObserveSyncDuration("two_way_reconciliation", time.Since(startTime).Seconds())
+	c.metrics.ObserveSyncDuration(fmt.Sprintf("reconciliation_%s", lbName), time.Since(startTime).Seconds())
+	return nil
+}
+
+// نگاشت کامل State مطلوب K8s و ارسال به لودبالانسرها جهت حذف Stateهای Drift شده
+func (c *ControllerImpl) SyncUpstreams(ctx context.Context) error {
+	var errs []error
+	for lbName, adapter := range c.loadBalancers {
+		if err := c.syncSingleLoadBalancer(ctx, lbName, adapter); err != nil {
+			errs = append(errs, err)
+		}
+	}
 
 	if len(errs) > 0 {
-		c.metrics.IncrementSyncErrors("two_way_reconciliation")
 		return fmt.Errorf("drift reconciliation errors: %v", errs)
 	}
 

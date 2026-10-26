@@ -57,6 +57,8 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 		GlobalIPReplacementList  domain.GlobalIPReplacementList `mapstructure:"global_ip_replacement_list"`
 		LoadBalancers            []map[string]interface{}       `mapstructure:"loadbalancers"`
 		RequestPoolSize          int                            `mapstructure:"request_pool_size"`
+		AllowEmptyUpstream       bool                           `mapstructure:"allow_empty_upstream"`
+		DefaultBackend           *domain.DefaultBackendConfig   `mapstructure:"default_backend"`
 	}
 
 	// Configure mapstructure decoder with DecodeHook
@@ -82,7 +84,12 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 		GlobalIPReplacementList:  rawConfig.GlobalIPReplacementList,
 		LoadBalancers:            domain.LoadBalancersConfig{},
 		RequestPoolSize:          rawConfig.RequestPoolSize,
+		AllowEmptyUpstream:       rawConfig.AllowEmptyUpstream,
+		DefaultBackend:           rawConfig.DefaultBackend,
 	}
+
+	certCtx, certCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer certCancel()
 
 	// Unmarshal loadbalancers based on type
 	for _, lbRaw := range rawConfig.LoadBalancers {
@@ -98,7 +105,7 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 				return nil, fmt.Errorf("unmarshal nginx config: %w", err)
 			}
 
-			certContent, err := l.loadCertificatesForLoadBalancer(context.Background(), nginxCfg.Name, nginxCfg.CertPath, nginxCfg.KeyPath, nginxCfg.CAPath, nginxCfg.GetHostName())
+			certContent, err := l.loadCertificatesForLoadBalancer(certCtx, nginxCfg.Name, nginxCfg.CertPath, nginxCfg.KeyPath, nginxCfg.CAPath, nginxCfg.GetHostName())
 			if err != nil {
 				return nil, err
 			}
@@ -114,7 +121,7 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 				return nil, fmt.Errorf("unmarshal envoy config: %w", err)
 			}
 
-			certContent, err := l.loadCertificatesForLoadBalancer(context.Background(), envoyCfg.Name, envoyCfg.CertPath, envoyCfg.KeyPath, envoyCfg.CAPath, envoyCfg.GetHostName())
+			certContent, err := l.loadCertificatesForLoadBalancer(certCtx, envoyCfg.Name, envoyCfg.CertPath, envoyCfg.KeyPath, envoyCfg.CAPath, envoyCfg.GetHostName())
 			if err != nil {
 				return nil, err
 			}

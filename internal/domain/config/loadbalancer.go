@@ -21,6 +21,10 @@ type LoadBalancerConfig interface {
 	GetCAPath() string
 	GetRequestPoolSize() int
 	GetRequestTimeOut() time.Duration
+	GetUpstreamSyncPeriod() time.Duration
+	GetPruneOrphans() bool
+	GetAllowEmptyUpstream() bool
+	GetDefaultBackend() *DefaultBackendConfig
 	SetDefaults(globalUpstreamSyncPeriod time.Duration, globalRequestPoolSize int) LoadBalancerConfig
 }
 

@@ -13,7 +13,7 @@ type LeaderElectionPort interface {
 	// SetCallbacks sets the callbacks for leader election events.
 	SetCallbacks(callbacks Callbacks)
 	// GetLeaderAddr returns the address of the current leader (e.g., Pod IP or service endpoint).
-	GetLeaderAddr() string
+	GetLeaderAddr(ctx context.Context) string
 }
 
 // Callbacks defines the callbacks for leader election events.

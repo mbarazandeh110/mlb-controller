@@ -22,10 +22,14 @@ type fakeKubernetes struct {
 
 func (f *fakeKubernetes) WatchServices(ctx context.Context, labels map[string]string, events chan<- ServiceEvent) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// Simulate sending one service event
+	svcs := make([]model.Service, 0, len(f.services))
 	for _, svc := range f.services {
+		svcs = append(svcs, svc)
+	}
+	f.mu.Unlock()
+
+	// Simulate sending service events
+	for _, svc := range svcs {
 		select {
 		case events <- ServiceEvent{Type: EventTypeAdd, Service: svc}:
 		case <-ctx.Done():
@@ -40,10 +44,14 @@ func (f *fakeKubernetes) WatchServices(ctx context.Context, labels map[string]st
 
 func (f *fakeKubernetes) WatchPods(ctx context.Context, events chan<- PodEvent) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// Simulate sending one pod event
+	pods := make([]model.Pod, 0, len(f.pods))
 	for _, pod := range f.pods {
+		pods = append(pods, pod)
+	}
+	f.mu.Unlock()
+
+	// Simulate sending pod events
+	for _, pod := range pods {
 		select {
 		case events <- PodEvent{Type: EventTypeAdd, Pod: pod}:
 		case <-ctx.Done():
@@ -57,10 +65,14 @@ func (f *fakeKubernetes) WatchPods(ctx context.Context, events chan<- PodEvent) 
 
 func (f *fakeKubernetes) WatchNodes(ctx context.Context, events chan<- NodeEvent) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// Simulate sending one node event
+	nodes := make([]model.Node, 0, len(f.nodes))
 	for _, node := range f.nodes {
+		nodes = append(nodes, node)
+	}
+	f.mu.Unlock()
+
+	// Simulate sending node events
+	for _, node := range nodes {
 		select {
 		case events <- NodeEvent{Type: EventTypeAdd, Node: node}:
 		case <-ctx.Done():

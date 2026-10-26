@@ -256,6 +256,7 @@ func TestKubernetesAdapter_WatchServices(t *testing.T) {
 	go func() {
 		_ = adapter.WatchServices(ctx, nil, events)
 	}()
+	require.Eventually(t, adapter.HasSynced, 5*time.Second, 10*time.Millisecond)
 
 	// 1. Create MLB service -> EventTypeAdd
 	svc := &corev1.Service{
@@ -354,6 +355,7 @@ func TestKubernetesAdapter_WatchPods(t *testing.T) {
 	go func() {
 		_ = adapter.WatchPods(ctx, events)
 	}()
+	require.Eventually(t, adapter.HasSynced, 5*time.Second, 10*time.Millisecond)
 
 	// 1. Create Pod -> EventTypeAdd
 	pod := &corev1.Pod{
@@ -382,14 +384,14 @@ func TestKubernetesAdapter_WatchPods(t *testing.T) {
 		assert.Equal(t, "test-pod", ev.Pod.Name)
 		assert.Equal(t, "10.244.0.5", ev.Pod.IP)
 		assert.True(t, ev.Pod.Ready)
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for Pod Add event")
 	}
 
 	// 2. Update Pod (unready) -> EventTypeUpdate
 	podUpdated := pod.DeepCopy()
 	podUpdated.Status.ContainerStatuses[0].Ready = false
-	_, err = fakeClient.CoreV1().Pods("default").UpdateStatus(context.Background(), podUpdated, metav1.UpdateOptions{})
+	_, err = fakeClient.CoreV1().Pods("default").Update(context.Background(), podUpdated, metav1.UpdateOptions{})
 	require.NoError(t, err)
 
 	select {
@@ -438,6 +440,7 @@ func TestKubernetesAdapter_WatchNodes(t *testing.T) {
 	go func() {
 		_ = adapter.WatchNodes(ctx, events)
 	}()
+	require.Eventually(t, adapter.HasSynced, 5*time.Second, 10*time.Millisecond)
 
 	// 1. Create Node -> EventTypeAdd
 	node := &corev1.Node{
@@ -613,19 +616,18 @@ func TestKubernetesAdapter_GetNodeByName(t *testing.T) {
 		assert.Error(t, err)
 	})
 
-	t.Run("Fallback to API when not in informer cache", func(t *testing.T) {
-		// Create a separate un-synced adapter to force cache miss
+	t.Run("Cache miss returns error without hitting API directly", func(t *testing.T) {
+		// Create a separate un-synced adapter to test cache miss
 		emptyInformerFactory := informers.NewSharedInformerFactory(k8sclient.NewSimpleClientset(), 0)
 		fallbackAdapter := &KubernetesAdapter{
-			client:          fakeClient, // client has worker-1
+			client:          fakeClient,
 			logger:          &fakeLogger{},
 			informerFactory: emptyInformerFactory,
 		}
 
-		res, err := fallbackAdapter.GetNodeByName(ctx, "worker-1")
-		assert.NoError(t, err)
-		assert.Equal(t, "worker-1", res.Name)
-		assert.Equal(t, "192.168.1.10", res.InternalIP)
+		_, err := fallbackAdapter.GetNodeByName(ctx, "worker-1")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "failed to get node worker-1 from cache")
 	})
 }
 

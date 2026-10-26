@@ -58,6 +58,26 @@ func ApplyDefaultValues(cfg *Config) {
 
 	// Apply defaults for each load balancer
 	for i, lb := range cfg.LoadBalancers.LoadBalancers {
-		cfg.LoadBalancers.LoadBalancers[i] = lb.SetDefaults(cfg.GlobalUpstreamSyncPeriod, cfg.RequestPoolSize)
+		lbWithDefaults := lb.SetDefaults(cfg.GlobalUpstreamSyncPeriod, cfg.RequestPoolSize)
+		switch concrete := lbWithDefaults.(type) {
+		case NginxConfig:
+			if !concrete.AllowEmptyUpstream && cfg.AllowEmptyUpstream {
+				concrete.AllowEmptyUpstream = true
+			}
+			if concrete.DefaultBackend == nil && cfg.DefaultBackend != nil {
+				concrete.DefaultBackend = cfg.DefaultBackend
+			}
+			cfg.LoadBalancers.LoadBalancers[i] = concrete
+		case EnvoyConfig:
+			if !concrete.AllowEmptyUpstream && cfg.AllowEmptyUpstream {
+				concrete.AllowEmptyUpstream = true
+			}
+			if concrete.DefaultBackend == nil && cfg.DefaultBackend != nil {
+				concrete.DefaultBackend = cfg.DefaultBackend
+			}
+			cfg.LoadBalancers.LoadBalancers[i] = concrete
+		default:
+			cfg.LoadBalancers.LoadBalancers[i] = lbWithDefaults
+		}
 	}
 }

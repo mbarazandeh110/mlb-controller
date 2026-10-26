@@ -13,10 +13,19 @@ type NginxValidator struct{}
 
 func (v *NginxValidator) Validate(cfg *config.Config) error {
 	for _, lb := range cfg.LoadBalancers.LoadBalancers {
-		if nginx, ok := lb.(config.NginxConfig); ok {
-			if err := v.validateNginxConfig(nginx); err != nil {
-				return fmt.Errorf("nginx '%s': %w", nginx.Name, err)
+		var nginx config.NginxConfig
+		switch c := lb.(type) {
+		case config.NginxConfig:
+			nginx = c
+		case *config.NginxConfig:
+			if c != nil {
+				nginx = *c
 			}
+		default:
+			continue
+		}
+		if err := v.validateNginxConfig(nginx); err != nil {
+			return fmt.Errorf("nginx '%s': %w", nginx.Name, err)
 		}
 	}
 	return nil

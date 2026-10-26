@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeLeaderElection is a fake implementation of LeaderElectionPort for testing.
@@ -57,7 +58,7 @@ func (f *fakeLeaderElection) SetCallbacks(callbacks Callbacks) {
 	f.callbacks = callbacks
 }
 
-func (f *fakeLeaderElection) GetLeaderAddr() string {
+func (f *fakeLeaderElection) GetLeaderAddr(ctx context.Context) string {
 	return "127.0.0.1:9090"
 }
 
@@ -81,33 +82,30 @@ func TestLeaderElectionPort(t *testing.T) {
 			},
 		}
 
-		// Create context with timeout
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 
-		// Run leader election in a goroutine
+		runDone := make(chan struct{})
 		go func() {
 			err := fake.Run(ctx)
 			assert.NoError(t, err)
+			close(runDone)
 		}()
 
-		// Wait briefly to ensure leadership starts
-		time.Sleep(50 * time.Millisecond)
-		assert.True(t, fake.IsLeader(), "should be leader")
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return fake.IsLeader() && started
+		}, 1*time.Second, 10*time.Millisecond, "should be leader and OnStartedLeading should be called")
 
-		mu.Lock()
-		isStarted := started
-		mu.Unlock()
-		assert.True(t, isStarted, "OnStartedLeading should be called")
+		// Stop leadership
+		cancel()
+		<-runDone
 
-		// Wait for context to cancel
-		<-ctx.Done()
-		time.Sleep(50 * time.Millisecond) // Allow time for cleanup
-		assert.False(t, fake.IsLeader(), "should not be leader after context cancel")
-
-		mu.Lock()
-		isStopped := stopped
-		mu.Unlock()
-		assert.True(t, isStopped, "OnStoppedLeading should be called")
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return !fake.IsLeader() && stopped
+		}, 1*time.Second, 10*time.Millisecond, "should not be leader and OnStoppedLeading should be called")
 	})
 }

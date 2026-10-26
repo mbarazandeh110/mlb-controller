@@ -11,6 +11,7 @@ import (
 	logging_ports "mlb-controller/internal/ports/logging"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest"
 	coordinationv1 "k8s.io/api/coordination/v1"
@@ -78,19 +79,18 @@ func TestKubernetesLeaderElection(t *testing.T) {
 			assert.NoError(t, err)
 		}()
 
-		time.Sleep(50 * time.Millisecond)
-		mu.Lock()
-		assert.True(t, le.IsLeader(), "should be leader when election is disabled")
-		assert.True(t, started, "OnStartedLeading should be called")
-		assert.False(t, stopped, "OnStoppedLeading should not be called yet")
-		mu.Unlock()
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return le.IsLeader() && started && !stopped
+		}, 2*time.Second, 10*time.Millisecond, "should be leader when election is disabled and OnStartedLeading called")
 
 		<-ctx.Done()
-		time.Sleep(50 * time.Millisecond)
-		mu.Lock()
-		assert.False(t, le.IsLeader(), "should not be leader after context cancel")
-		assert.True(t, stopped, "OnStoppedLeading should be called")
-		mu.Unlock()
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return !le.IsLeader() && stopped
+		}, 2*time.Second, 10*time.Millisecond, "should not be leader after context cancel and OnStoppedLeading called")
 	})
 
 	t.Run("Enabled leader election with fake client", func(t *testing.T) {
@@ -134,17 +134,17 @@ func TestKubernetesLeaderElection(t *testing.T) {
 			assert.NoError(t, err)
 		}()
 
-		time.Sleep(50 * time.Millisecond)
-		mu.Lock()
-		assert.True(t, started, "OnStartedLeading should be called")
-		assert.False(t, stopped, "OnStoppedLeading should not be called yet")
-		mu.Unlock()
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return started && !stopped
+		}, 2*time.Second, 10*time.Millisecond, "OnStartedLeading should be called")
 
 		<-ctx.Done()
-		time.Sleep(50 * time.Millisecond)
-		mu.Lock()
-		assert.False(t, le.IsLeader(), "should not be leader after context cancel")
-		assert.True(t, stopped, "OnStoppedLeading should be called")
-		mu.Unlock()
+		require.Eventually(t, func() bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return !le.IsLeader() && stopped
+		}, 2*time.Second, 10*time.Millisecond, "should not be leader after context cancel and OnStoppedLeading called")
 	})
 }

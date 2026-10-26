@@ -58,7 +58,7 @@ func (f *fakeLeaderElection) SetLeader(val bool) {
 	defer f.mu.Unlock()
 	f.leader = val
 }
-func (f *fakeLeaderElection) GetLeaderAddr() string { return "127.0.0.1:9090" }
+func (f *fakeLeaderElection) GetLeaderAddr(ctx context.Context) string { return "127.0.0.1:9090" }
 
 func TestPrometheusAdapter_Healthz(t *testing.T) {
 	adapter := NewPrometheusAdapter(&fakeLogger{}, nil, domain.MetricsConfig{

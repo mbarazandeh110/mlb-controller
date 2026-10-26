@@ -22,6 +22,7 @@ type mockLoadBalancerConfig struct {
 	caPath            string
 	requestPoolSize   int
 	requestTimeOut    time.Duration
+	defaultBackend    *config.DefaultBackendConfig
 }
 
 func (m *mockLoadBalancerConfig) GetName() string                      { return m.name }
@@ -30,14 +31,20 @@ func (m *mockLoadBalancerConfig) GetIPReplacement() bool               { return 
 func (m *mockLoadBalancerConfig) GetIPReplacementList() config.IPReplacementList {
 	return m.ipReplacementList
 }
-func (m *mockLoadBalancerConfig) GetType() string                  { return m.lbType }
-func (m *mockLoadBalancerConfig) GetHostName() string              { return m.hostname }
-func (m *mockLoadBalancerConfig) GetProtocol() string              { return "https" }
-func (m *mockLoadBalancerConfig) GetCertPath() string              { return m.certPath }
-func (m *mockLoadBalancerConfig) GetKeyPath() string               { return m.keyPath }
-func (m *mockLoadBalancerConfig) GetCAPath() string                { return m.caPath }
-func (m *mockLoadBalancerConfig) GetRequestPoolSize() int          { return m.requestPoolSize }
-func (m *mockLoadBalancerConfig) GetRequestTimeOut() time.Duration { return m.requestTimeOut }
+func (m *mockLoadBalancerConfig) GetType() string                      { return m.lbType }
+func (m *mockLoadBalancerConfig) GetHostName() string                  { return m.hostname }
+func (m *mockLoadBalancerConfig) GetProtocol() string                  { return "https" }
+func (m *mockLoadBalancerConfig) GetCertPath() string                  { return m.certPath }
+func (m *mockLoadBalancerConfig) GetKeyPath() string                   { return m.keyPath }
+func (m *mockLoadBalancerConfig) GetCAPath() string                    { return m.caPath }
+func (m *mockLoadBalancerConfig) GetRequestPoolSize() int              { return m.requestPoolSize }
+func (m *mockLoadBalancerConfig) GetRequestTimeOut() time.Duration     { return m.requestTimeOut }
+func (m *mockLoadBalancerConfig) GetUpstreamSyncPeriod() time.Duration { return 0 }
+func (m *mockLoadBalancerConfig) GetPruneOrphans() bool                { return false }
+func (m *mockLoadBalancerConfig) GetAllowEmptyUpstream() bool          { return false }
+func (m *mockLoadBalancerConfig) GetDefaultBackend() *config.DefaultBackendConfig {
+	return m.defaultBackend
+}
 func (m *mockLoadBalancerConfig) SetDefaults(time.Duration, int) config.LoadBalancerConfig {
 	return m
 }
@@ -138,6 +145,68 @@ func TestLoadBalancerValidator_Validate(t *testing.T) {
 		err := validator.Validate(cfg)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "ip_replacement_list is empty")
+	})
+
+	t.Run("ValidDefaultBackend", func(t *testing.T) {
+		cfg := &config.Config{
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					&mockLoadBalancerConfig{
+						name:      "test-lb",
+						lbType:    "nginx",
+						addresses: []config.AddressConfig{{IP: "192.168.1.1", Port: 8080}},
+						defaultBackend: &config.DefaultBackendConfig{
+							IP:   "10.0.0.99",
+							Port: 8080,
+						},
+					},
+				},
+			},
+		}
+		err := validator.Validate(cfg)
+		assert.NoError(t, err)
+	})
+
+	t.Run("InvalidDefaultBackendIP", func(t *testing.T) {
+		cfg := &config.Config{
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					&mockLoadBalancerConfig{
+						name:      "test-lb",
+						lbType:    "nginx",
+						addresses: []config.AddressConfig{{IP: "192.168.1.1", Port: 8080}},
+						defaultBackend: &config.DefaultBackendConfig{
+							IP:   "not-an-ip",
+							Port: 8080,
+						},
+					},
+				},
+			},
+		}
+		err := validator.Validate(cfg)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid IP in default_backend")
+	})
+
+	t.Run("InvalidDefaultBackendPort", func(t *testing.T) {
+		cfg := &config.Config{
+			LoadBalancers: config.LoadBalancersConfig{
+				LoadBalancers: []config.LoadBalancerConfig{
+					&mockLoadBalancerConfig{
+						name:      "test-lb",
+						lbType:    "nginx",
+						addresses: []config.AddressConfig{{IP: "192.168.1.1", Port: 8080}},
+						defaultBackend: &config.DefaultBackendConfig{
+							IP:   "10.0.0.99",
+							Port: 70000,
+						},
+					},
+				},
+			},
+		}
+		err := validator.Validate(cfg)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "invalid port in default_backend")
 	})
 }
 

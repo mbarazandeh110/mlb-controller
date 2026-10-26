@@ -241,7 +241,7 @@ func setupTestController(t *testing.T) (*ControllerImpl, *fakeLBAdapter, *fakeK8
 		GlobalIPReplacementList:  config.GlobalIPReplacementList{},
 		LoadBalancers: config.LoadBalancersConfig{
 			LoadBalancers: []config.LoadBalancerConfig{
-				&config.NginxConfig{
+				config.NginxConfig{
 					Type: "nginx",
 					Name: "test-lb",
 				},
@@ -306,6 +306,7 @@ func TestController_SyncUpstreamsForService_ReadyPods(t *testing.T) {
 
 func TestController_SyncUpstreamsForService_ZeroReadyPods(t *testing.T) {
 	ctrl, lbAdapter, k8sPort, metricsPort := setupTestController(t)
+	ctrl.config.AllowEmptyUpstream = true
 	ctx := context.Background()
 
 	svc := model.Service{
@@ -577,7 +578,7 @@ func TestController_IPReplacementIntegration(t *testing.T) {
 		},
 		LoadBalancers: config.LoadBalancersConfig{
 			LoadBalancers: []config.LoadBalancerConfig{
-				&config.NginxConfig{
+				config.NginxConfig{
 					Type:          "nginx",
 					Name:          "test-lb",
 					IPReplacement: true,
@@ -796,7 +797,7 @@ func TestController_RunPeriodicSync(t *testing.T) {
 		GlobalIPReplacementList:  config.GlobalIPReplacementList{},
 		LoadBalancers: config.LoadBalancersConfig{
 			LoadBalancers: []config.LoadBalancerConfig{
-				&config.NginxConfig{
+				config.NginxConfig{
 					Type: "nginx",
 					Name: "test-lb",
 				},
@@ -931,4 +932,276 @@ func TestController_HasSynced_Guard(t *testing.T) {
 
 	all := lbAdapter.GetAllUpstreams()
 	assert.Empty(t, all, "SyncUpstreams must be skipped when informers have not synced")
+}
+
+func TestController_FallbackDefaultBackend_ZeroReadyPods(t *testing.T) {
+	ctrl, lbAdapter, k8sPort, _ := setupTestController(t)
+	ctx := context.Background()
+
+	// Configure fallback default backend
+	ctrl.config.DefaultBackend = &config.DefaultBackendConfig{
+		IP:     "10.0.0.99",
+		Port:   8080,
+		Weight: 5,
+	}
+
+	svc := model.Service{
+		Name:      "fallback-svc",
+		Namespace: "default",
+		Labels: map[string]string{
+			"mlb-loadbalancer-name": "test-lb",
+			"mlb-upstream-name":     "fallback-upstream",
+			"mlb-port":              "30080",
+		},
+		NodePort: 30080,
+		Selector: map[string]string{"app": "fallback"},
+	}
+
+	// 0 pods returned
+	k8sPort.pods = []model.Pod{}
+
+	err := ctrl.syncUpstreamsForService(ctx, svc)
+	require.NoError(t, err)
+
+	synced := lbAdapter.GetSyncedUpstreams()
+	require.Len(t, synced, 1)
+	assert.Equal(t, "fallback-upstream", synced[0].Name)
+	require.Len(t, synced[0].Backends, 1)
+	assert.Equal(t, "10.0.0.99", synced[0].Backends[0].IP)
+	assert.Equal(t, int32(8080), synced[0].Backends[0].Port)
+	assert.Equal(t, 5, synced[0].Backends[0].Weight)
+}
+
+func TestController_SafetyNet_ZeroReadyPods_NoDefaultBackend(t *testing.T) {
+	ctrl, lbAdapter, k8sPort, _ := setupTestController(t)
+	ctx := context.Background()
+
+	ctrl.config.AllowEmptyUpstream = false
+
+	svc := model.Service{
+		Name:      "safetynet-svc",
+		Namespace: "default",
+		Labels: map[string]string{
+			"mlb-loadbalancer-name": "test-lb",
+			"mlb-upstream-name":     "safetynet-upstream",
+			"mlb-port":              "30080",
+		},
+		NodePort: 30080,
+		Selector: map[string]string{"app": "safetynet"},
+	}
+
+	// 0 pods
+	k8sPort.pods = []model.Pod{}
+
+	err := ctrl.syncUpstreamsForService(ctx, svc)
+	require.NoError(t, err)
+
+	// LB must NOT be called to drain backends
+	synced := lbAdapter.GetSyncedUpstreams()
+	assert.Empty(t, synced, "Safety net must preserve existing backends when 0 ready pods and allow_empty_upstream is false")
+}
+
+func TestController_AllowEmptyUpstream_ZeroReadyPods(t *testing.T) {
+	ctrl, lbAdapter, k8sPort, _ := setupTestController(t)
+	ctx := context.Background()
+
+	ctrl.config.AllowEmptyUpstream = true
+
+	svc := model.Service{
+		Name:      "allowempty-svc",
+		Namespace: "default",
+		Labels: map[string]string{
+			"mlb-loadbalancer-name": "test-lb",
+			"mlb-upstream-name":     "allowempty-upstream",
+			"mlb-port":              "30080",
+		},
+		NodePort: 30080,
+		Selector: map[string]string{"app": "allowempty"},
+	}
+
+	k8sPort.pods = []model.Pod{}
+
+	err := ctrl.syncUpstreamsForService(ctx, svc)
+	require.NoError(t, err)
+
+	synced := lbAdapter.GetSyncedUpstreams()
+	require.Len(t, synced, 1)
+	assert.Equal(t, "allowempty-upstream", synced[0].Name)
+	assert.Empty(t, synced[0].Backends, "AllowEmptyUpstream should drain all backends")
+}
+
+func TestController_ServiceUpdate_LabelChange_CleansUpOldUpstream(t *testing.T) {
+	ctrl, lbAdapter, k8sPort, _ := setupTestController(t)
+	ctx := context.Background()
+
+	oldSvc := model.Service{
+		Name:      "relabel-svc",
+		Namespace: "default",
+		Labels: map[string]string{
+			"mlb-loadbalancer-name": "test-lb",
+			"mlb-upstream-name":     "old-upstream",
+			"mlb-port":              "30080",
+		},
+		NodePort: 30080,
+		Selector: map[string]string{"app": "relabel"},
+	}
+
+	k8sPort.pods = []model.Pod{
+		{Name: "pod1", Ready: true, NodeName: "node1"},
+	}
+
+	// First sync with old labels
+	k8sPort.SetService(oldSvc)
+	err := ctrl.syncHandler(ctx, "default/relabel-svc")
+	require.NoError(t, err)
+
+	synced := lbAdapter.GetSyncedUpstreams()
+	require.Len(t, synced, 1)
+	assert.Equal(t, "old-upstream", synced[0].Name)
+
+	// Now service changes upstream name to new-upstream
+	newSvc := oldSvc
+	newSvc.Labels = map[string]string{
+		"mlb-loadbalancer-name": "test-lb",
+		"mlb-upstream-name":     "new-upstream",
+		"mlb-port":              "30080",
+	}
+	k8sPort.SetService(newSvc)
+
+	err = ctrl.syncHandler(ctx, "default/relabel-svc")
+	require.NoError(t, err)
+
+	synced = lbAdapter.GetSyncedUpstreams()
+	// Should have synced: 1st old-upstream, 2nd drained old-upstream (backends=0), 3rd new-upstream
+	require.GreaterOrEqual(t, len(synced), 3)
+	assert.Equal(t, "old-upstream", synced[1].Name)
+	assert.Empty(t, synced[1].Backends, "Old upstream must be drained on service label change")
+	assert.Equal(t, "new-upstream", synced[2].Name)
+	assert.NotEmpty(t, synced[2].Backends)
+}
+
+func TestController_EnqueueUpstreamsForPod_NamespaceIsolation(t *testing.T) {
+	ctrl, _, _, _ := setupTestController(t)
+
+	ctrl.stateMutex.Lock()
+	ctrl.state.Services["prod/my-svc"] = model.Service{
+		Name:      "my-svc",
+		Namespace: "prod",
+		Selector:  map[string]string{"app": "api"},
+	}
+	ctrl.state.Services["dev/my-svc"] = model.Service{
+		Name:      "my-svc",
+		Namespace: "dev",
+		Selector:  map[string]string{"app": "api"},
+	}
+	ctrl.stateMutex.Unlock()
+
+	// Pod in dev namespace
+	devPod := model.Pod{
+		Name:      "api-pod-1",
+		Namespace: "dev",
+		Labels:    map[string]string{"app": "api"},
+	}
+
+	ctrl.enqueueUpstreamsForPod(devPod)
+
+	assert.Equal(t, 1, ctrl.queue.Len())
+	item, _ := ctrl.queue.Get()
+	assert.Equal(t, "dev/my-svc", item.(string), "Should only enqueue service in the same namespace")
+	ctrl.queue.Done(item)
+}
+
+func TestController_PerLoadBalancer_DefaultBackend(t *testing.T) {
+	ctx := context.Background()
+
+	lbAdapterWest := newFakeLBAdapter()
+	lbAdapterEast := newFakeLBAdapter()
+
+	lbMap := map[string]loadbalancer.LoadBalancerAdapter{
+		"lb-west": lbAdapterWest,
+		"lb-east": lbAdapterEast,
+	}
+
+	cfg := &config.Config{
+		RequestPoolSize:          2,
+		GlobalUpstreamSyncPeriod: 10 * time.Minute,
+		LoadBalancers: config.LoadBalancersConfig{
+			LoadBalancers: []config.LoadBalancerConfig{
+				config.NginxConfig{
+					Type: "nginx",
+					Name: "lb-west",
+					DefaultBackend: &config.DefaultBackendConfig{
+						IP:     "10.1.0.99",
+						Port:   8080,
+						Weight: 2,
+					},
+				},
+				config.NginxConfig{
+					Type: "nginx",
+					Name: "lb-east",
+					DefaultBackend: &config.DefaultBackendConfig{
+						IP:     "10.2.0.99",
+						Port:   9090,
+						Weight: 3,
+					},
+				},
+			},
+		},
+	}
+
+	k8sPort := &fakeK8sPort{
+		nodes:    map[string]model.Node{},
+		pods:     []model.Pod{}, // 0 pods
+		services: make(map[string]*model.Service),
+	}
+	metricsPort := newFakeMetrics()
+	logger := &fakeLogger{}
+
+	ctrl := NewController(k8sPort, logger, metricsPort, lbMap, cfg)
+
+	svcWest := model.Service{
+		Name:      "svc-west",
+		Namespace: "default",
+		Labels: map[string]string{
+			"mlb-loadbalancer-name": "lb-west",
+			"mlb-upstream-name":     "up-west",
+			"mlb-port":              "30080",
+		},
+		NodePort: 30080,
+	}
+
+	svcEast := model.Service{
+		Name:      "svc-east",
+		Namespace: "default",
+		Labels: map[string]string{
+			"mlb-loadbalancer-name": "lb-east",
+			"mlb-upstream-name":     "up-east",
+			"mlb-port":              "30090",
+		},
+		NodePort: 30090,
+	}
+
+	// Reconcile west service
+	err := ctrl.syncUpstreamsForService(ctx, svcWest)
+	require.NoError(t, err)
+
+	syncedWest := lbAdapterWest.GetSyncedUpstreams()
+	require.Len(t, syncedWest, 1)
+	assert.Equal(t, "up-west", syncedWest[0].Name)
+	require.Len(t, syncedWest[0].Backends, 1)
+	assert.Equal(t, "10.1.0.99", syncedWest[0].Backends[0].IP)
+	assert.Equal(t, int32(8080), syncedWest[0].Backends[0].Port)
+	assert.Equal(t, 2, syncedWest[0].Backends[0].Weight)
+
+	// Reconcile east service
+	err = ctrl.syncUpstreamsForService(ctx, svcEast)
+	require.NoError(t, err)
+
+	syncedEast := lbAdapterEast.GetSyncedUpstreams()
+	require.Len(t, syncedEast, 1)
+	assert.Equal(t, "up-east", syncedEast[0].Name)
+	require.Len(t, syncedEast[0].Backends, 1)
+	assert.Equal(t, "10.2.0.99", syncedEast[0].Backends[0].IP)
+	assert.Equal(t, int32(9090), syncedEast[0].Backends[0].Port)
+	assert.Equal(t, 3, syncedEast[0].Backends[0].Weight)
 }

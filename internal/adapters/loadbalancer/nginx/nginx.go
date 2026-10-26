@@ -28,7 +28,7 @@ type NginxAdapter struct {
 
 	// مکانیزم In-Memory Cache برای جلوگیری از بمباران API (رفع خطای O(N))
 	cache      map[string]map[string][]model.Backend // clientBaseURL -> upstreamName -> backends
-	cacheExp   time.Time
+	cacheExp   map[string]time.Time                  // clientBaseURL -> expiration time
 	cacheMutex sync.RWMutex
 }
 
@@ -50,13 +50,15 @@ func NewNginxAdapter(cfg config.NginxConfig, logger logging.Logger) (*NginxAdapt
 		logger:    logger,
 		semaphore: sem,
 		cache:     make(map[string]map[string][]model.Backend),
+		cacheExp:  make(map[string]time.Time),
 	}, nil
 }
 
 // واکشی Bulk کل آپ‌استریم‌ها و ذخیره در کش با TTL دو ثانیه‌ای
 func (a *NginxAdapter) refreshCache(ctx context.Context, client *NginxClient) (map[string][]model.Backend, error) {
 	a.cacheMutex.RLock()
-	if time.Now().Before(a.cacheExp) && a.cache[client.baseURL] != nil {
+	exp, hasExp := a.cacheExp[client.baseURL]
+	if hasExp && time.Now().Before(exp) && a.cache[client.baseURL] != nil {
 		defer a.cacheMutex.RUnlock()
 		return a.cache[client.baseURL], nil
 	}
@@ -73,7 +75,7 @@ func (a *NginxAdapter) refreshCache(ctx context.Context, client *NginxClient) (m
 
 	a.cacheMutex.Lock()
 	a.cache[client.baseURL] = parsedState
-	a.cacheExp = time.Now().Add(2 * time.Second)
+	a.cacheExp[client.baseURL] = time.Now().Add(2 * time.Second)
 	a.cacheMutex.Unlock()
 
 	return parsedState, nil
@@ -82,6 +84,7 @@ func (a *NginxAdapter) refreshCache(ctx context.Context, client *NginxClient) (m
 func (a *NginxAdapter) invalidateCache(clientBaseURL string) {
 	a.cacheMutex.Lock()
 	delete(a.cache, clientBaseURL)
+	delete(a.cacheExp, clientBaseURL)
 	a.cacheMutex.Unlock()
 }
 
@@ -89,14 +92,16 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 	// Aggregate duplicate backends (e.g. multiple Pods on the same Node) by incrementing weight
 	desiredBackend := make(map[string]model.Backend)
 	for _, db := range upstream.Backends {
+		weightToAdd := db.Weight
+		if weightToAdd < 1 {
+			weightToAdd = 1
+		}
 		key := backendKey(db)
 		if tmpdb, exists := desiredBackend[key]; exists {
-			tmpdb.Weight += 1
+			tmpdb.Weight += weightToAdd
 			desiredBackend[key] = tmpdb
 		} else {
-			if db.Weight < 1 {
-				db.Weight = 1
-			}
+			db.Weight = weightToAdd
 			desiredBackend[key] = db
 		}
 	}
@@ -130,16 +135,6 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 			currentBackends := allBackends[upstream.Name]
 			if len(currentBackends) == 0 && len(allBackends[""]) > 0 {
 				currentBackends = allBackends[""]
-			}
-
-			// Safety Net check: If desired has 0 backends and current has > 0 backends,
-			// and AllowEmptyUpstream is false, skip draining to prevent outage!
-			if len(upstream.Backends) == 0 && len(currentBackends) > 0 && !a.config.AllowEmptyUpstream {
-				a.logger.Warn("Safety Net triggered: skipping backend draining because allow_empty_upstream is false",
-					logging.Field{Key: "client", Value: c.baseURL},
-					logging.Field{Key: "upstream", Value: upstream.Name},
-					logging.Field{Key: "current_backends", Value: len(currentBackends)})
-				return
 			}
 
 			updateBackends := make(map[string]model.Backend)

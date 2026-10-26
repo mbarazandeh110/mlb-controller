@@ -153,7 +153,7 @@ func (f *fakeLeaderElection) SetLeader(val bool) {
 	f.leader = val
 }
 
-func (f *fakeLeaderElection) GetLeaderAddr() string { return "127.0.0.1:9090" }
+func (f *fakeLeaderElection) GetLeaderAddr(ctx context.Context) string { return "127.0.0.1:9090" }
 
 // fakeController implements controller.Controller for testing.
 type fakeController struct {

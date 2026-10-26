@@ -2,6 +2,14 @@
 # Specifies the default period for syncing upstreams across all load balancers
 global_upstream_sync_period: 10s # default 10s and sync period for all load balancers (update_period)
 request_pool_size: 20 # default 10
+allow_empty_upstream: false # default false - safety net preventing wiping all backends when desired backends == 0
+
+# Fallback default backend configuration (optional global fallback).
+# Note: Each load balancer can define its own dedicated 'default_backend' under 'loadbalancers' below.
+# default_backend:
+#   ip: "10.0.0.99"
+#   port: 8080
+#   weight: 1
 
 # Leader election settings for ensuring a single controller instance
 leader_election:
@@ -94,6 +102,11 @@ loadbalancers:
     remove_api: /dynamic
     fail_timeout: 60s # default 60s
     request_timeout: 10s # default 30s
+    # Dedicated fallback default backend for this load balancer (optional)
+    default_backend:
+      ip: 10.0.0.99
+      port: 8080
+      weight: 1
   - type: nginx
     name: localCDN # must be unique across all load balancers
     protocol: https
@@ -110,6 +123,11 @@ loadbalancers:
     list_api: /api/upstream
     add_api: /dynamic
     remove_api: /dynamic
+    # Dedicated fallback default backend for this load balancer (optional)
+    default_backend:
+      ip: 192.168.10.99
+      port: 8443
+      weight: 2
   # - type: envoy
   #   name: LoadBalancer1 # must be unique across all load balancers
   #   protocol: grpc

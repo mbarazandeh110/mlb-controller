@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"mlb-controller/internal/domain/config"
 	config_ports "mlb-controller/internal/ports/config"
+	"mlb-controller/internal/util"
 	"time"
 )
 
@@ -52,6 +53,14 @@ func (v *GlobalConfigValidator) Validate(cfg *config.Config) error {
 	}
 	if cfg.GlobalUpstreamSyncPeriod < 0 {
 		return fmt.Errorf("global_upstream_sync_period must be non-negative")
+	}
+	if cfg.DefaultBackend != nil {
+		if !util.IsValidIP(cfg.DefaultBackend.IP) {
+			return fmt.Errorf("global default_backend: invalid IP: %s", cfg.DefaultBackend.IP)
+		}
+		if !util.IsValidPort(int(cfg.DefaultBackend.Port)) {
+			return fmt.Errorf("global default_backend: invalid port: %d", cfg.DefaultBackend.Port)
+		}
 	}
 
 	for _, lb := range cfg.LoadBalancers.LoadBalancers {

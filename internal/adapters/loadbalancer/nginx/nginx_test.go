@@ -162,7 +162,7 @@ func TestSyncUpstream(t *testing.T) {
 		assert.True(t, foundSyncLog, "Expected structured logging on sync")
 	})
 
-	t.Run("SyncUpstream_EmptyBackendsSafetyNet", func(t *testing.T) {
+	t.Run("SyncUpstream_EmptyBackendsDrainsAll", func(t *testing.T) {
 		mu.Lock()
 		requests = nil
 		mu.Unlock()
@@ -173,7 +173,7 @@ func TestSyncUpstream(t *testing.T) {
 			Backends: []model.Backend{},
 		}
 
-		// With AllowEmptyUpstream = false (default), safety net prevents drain
+		// When called with empty backends, SyncUpstream must drain existing backends
 		err := adapter.SyncUpstream(ctx, upstream)
 		assert.NoError(t, err)
 
@@ -183,12 +183,12 @@ func TestSyncUpstream(t *testing.T) {
 
 		var foundRemove bool
 		for _, req := range reqs {
-			if strings.Contains(req, "upstream_remove") {
+			if strings.Contains(req, "upstream_remove") && strings.Contains(req, "192.168.1.1") && strings.Contains(req, "8080") {
 				foundRemove = true
 				break
 			}
 		}
-		assert.False(t, foundRemove, "Expected no upstream_remove when AllowEmptyUpstream is false")
+		assert.True(t, foundRemove, "Expected upstream_remove to be called when draining backends")
 	})
 
 	t.Run("SyncUpstream_EmptyBackendsDrainsAll_WhenAllowed", func(t *testing.T) {

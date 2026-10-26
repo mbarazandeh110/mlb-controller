@@ -39,9 +39,11 @@ For each matching Service, it identifies the backing Pods, determines which Node
 
 | Trigger | Description |
 |-------|-----------|
-| **Pod Events** | Add, delete, or readiness change |
-| **Periodic Sync** | Configurable per load balancer or globally |
-| **Leader Election** | Sync runs only on the elected leader instance |
+| **Service Events** | Add, delete, or label modifications (e.g. changing upstream name or target load balancer triggers automatic drain of old upstream) |
+| **Pod Events** | Add, delete, or readiness state changes (`Ready: true/false`), as well as Pod migrations across Nodes |
+| **Node Events** | Node IP address changes |
+| **Periodic Sync** | Two-way reconciliation running per load balancer to eliminate state drift and prune orphaned upstreams |
+| **Leader Election** | Sync runs only on the elected leader replica in HA mode |
 
 ---
 
@@ -54,7 +56,7 @@ For each matching Service, it identifies the backing Pods, determines which Node
   - `services` (get, list, watch)
   - `pods` (get, list, watch)
   - `nodes` (get, list, watch)
-  - `leases` (for leader election, if enabled)
+  - `leases` in `coordination.k8s.io` (for leader election, if enabled)
 
 ---
 
@@ -62,16 +64,49 @@ For each matching Service, it identifies the backing Pods, determines which Node
 
 Sample configuration is located at [`configs/config.yaml`](./configs/config.yaml).
 
-### Key Sections
+### Key Settings
 
 #### `global_upstream_sync_period`
-Default sync interval for all load balancers (overridable per LB).
+Default sync interval for all load balancers (e.g. `30s`), overridable per load balancer via `upstream_sync_period`.
+
+#### `allow_empty_upstream`
+Safety net flag (global or per-LB, default: `false`).
+- If `false`: when a managed Service has 0 ready pods, `mlb-controller` logs a warning and preserves the existing backends on the external load balancer to avoid catastrophic outages.
+- If `true`: allows draining all backends from the upstream when all Pods are not ready.
+- *Note:* Deleting a Service from Kubernetes always drains and removes its backends from the load balancer.
+
+#### `default_backend`
+Fallback backend used when 0 Pods are ready. Can be configured per load balancer (under `loadbalancers[].default_backend`) or globally:
+```yaml
+loadbalancers:
+  - type: nginx
+    name: CDN-West
+    default_backend:
+      ip: "10.1.0.99"
+      port: 8080
+      weight: 1
+  - type: nginx
+    name: CDN-East
+    default_backend:
+      ip: "10.2.0.99"
+      port: 9090
+      weight: 2
+```
 
 #### `leader_election`
-Enable high availability with a single active controller.
+Enable high availability with Kubernetes LeaseLocks:
+```yaml
+leader_election:
+  enabled: true
+  lease_name: mlb-controller-leader
+  lease_namespace: kube-system
+  lease_duration: 15s
+  renew_deadline: 10s
+  retry_period: 2s
+```
 
 #### `global_ip_replacement_list`
-Define reusable network (`net`) and IP (`ip`) rewrite rules.
+Define reusable network (`net`) and IP (`ip`) rewrite rules (supports both IPv4 and IPv6).
 
 #### `loadbalancers`
 List of external load balancers to manage.
@@ -88,6 +123,13 @@ loadbalancers:
     list_api: /api/upstream
     add_api: /dynamic
     remove_api: /dynamic
+    upstream_sync_period: 30s
+    prune_orphans: true
+    allow_empty_upstream: false
+    default_backend:
+      ip: 10.0.0.99
+      port: 8080
+      weight: 1
     ip_replacement: true
     ip_replacement_list:
       global_nets: [cdn1]
@@ -103,39 +145,46 @@ loadbalancers:
 ### 1. Build & Deploy
 
 ```bash
-# Clone the repo
+# Clone the repository
 git clone https://github.com/mbarazandeh110/mlb-controller.git
 cd mlb-controller
 
-# Build the container
-docker build -t mlb-controller:latest .
+# Build binary
+make build
 
-# Push to registry
-docker push your-registry/mlb-controller:latest
+# Build container image
+docker build -t mlb-controller:latest .
 ```
 
 ### 2. Deploy to Kubernetes
 
+Deploy the controller using Helm:
+
 ```bash
+helm install mlb-controller ./charts/mlb-controller -n kube-system
 ```
 
-> Manifests include: Deployment, ServiceAccount, ClusterRole, ConfigMap (with config.yaml)
+Or render and apply manifests using `helm template`:
+
+```bash
+helm template mlb-controller ./charts/mlb-controller | kubectl apply -f -
+```
 
 ### 3. Mount Config
 
-Ensure `config.yaml` is mounted into the pod at `/etc/mlb-controller/config.yaml`.
+Ensure `config.yaml` is mounted into the pod at `/etc/mlb-controller/config.yaml`:
 
 ```yaml
 volumeMounts:
   - name: config
-    mountPath: /etc/mlb
+    mountPath: /etc/mlb-controller
 ```
 
 ---
 
 ## Usage Example
 
-Label a Service to be managed:
+Label a Service of type `NodePort` or `LoadBalancer` to be managed:
 
 ```yaml
 apiVersion: v1
@@ -157,26 +206,48 @@ spec:
 ```
 
 → The controller will:
-- Detect Pods behind `my-app`
-- Map `NodeIP:30080` → backend
-- Apply IP replacements
-- Add to `backend-api` upstream in the `CDN` NGINX load balancer
+- Detect ready Pods backing `my-app`
+- Resolve hosting Node IPs (`InternalIP` fallback to `ExternalIP`)
+- Apply NAT-like IP/CIDR replacement rules
+- Aggregate weights for multiple Pods scheduled on the same Node
+- Synchronize backends to `backend-api` upstream in the `CDN` NGINX load balancer
 
 ---
 
-## Metrics
+## Health Checks & Metrics
 
-Exposed on `:9090/metrics` (Prometheus format)
+### Probes
 
-| Metric | Description |
-|-------|-------------|
+Exposed on port `:9090` (or configured `metrics.port`):
+- **`/healthz`**: Liveness probe (HTTP 200 OK)
+- **`/readyz`**: Readiness probe (HTTP 200 OK when Informers are synchronized, HTTP 503 otherwise)
+
+### Prometheus Metrics
+
+Exposed on `:9090/metrics`:
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `mlb_is_leader` | Gauge | `1` if this controller instance is the active leader, `0` if standby |
+| `mlb_backends_total` | Gauge | Total number of active backends configured per upstream |
+| `mlb_sync_errors_total` | Counter | Total count of synchronization and drift errors per upstream or LB |
+| `mlb_sync_duration_seconds` | Histogram | Latency in seconds of upstream synchronization operations |
+| `mlb_sync_upstreams_total` | Counter | Total count of drift reconciliation passes executed |
+
 ---
 
 ## Development
 
 ```bash
 # Run locally (outside cluster)
-go run main.go --config configs/config.yaml
+go run ./cmd/mlb-controller --config configs/config.yaml
+```
+
+Run verification targets:
+```bash
+make fmt && make vet
+make test
+make build
 ```
 
 Use `make test`, `make lint`, `make build`.

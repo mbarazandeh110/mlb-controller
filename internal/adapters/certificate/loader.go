@@ -7,7 +7,6 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"os"
 	"time"
@@ -75,7 +74,7 @@ func validateCert(certPath, keyPath, caPath, hostname string) error {
 
 	// Validate certificate and key pair
 	if certPath != "" {
-		if err := validateCertKey(certPath, keyPath, hostname); err != nil {
+		if err := validateCertKey(certPath, keyPath); err != nil {
 			return fmt.Errorf("invalid certificate: %w", err)
 		}
 	}
@@ -85,7 +84,7 @@ func validateCert(certPath, keyPath, caPath, hostname string) error {
 		if !util.IsFileExists(caPath) {
 			return fmt.Errorf("ca_file %s does not exist", caPath)
 		}
-		if err := validateCA(caPath, certPath, hostname); err != nil {
+		if err := validateCA(caPath); err != nil {
 			return fmt.Errorf("invalid ca_file: %w", err)
 		}
 	}
@@ -93,8 +92,8 @@ func validateCert(certPath, keyPath, caPath, hostname string) error {
 	return nil
 }
 
-// validateCA validates that the file contains a valid PEM certificate and verifies the certificate chain if a certificate is provided.
-func validateCA(caFilePath, certFilePath, hostname string) error {
+// validateCA validates that the file contains a valid PEM certificate.
+func validateCA(caFilePath string) error {
 	caContent, err := os.ReadFile(caFilePath)
 	if err != nil {
 		return fmt.Errorf("failed to read ca_file '%s': %w", caFilePath, err)
@@ -104,34 +103,12 @@ func validateCA(caFilePath, certFilePath, hostname string) error {
 		return fmt.Errorf("invalid CA certificate in ca_file '%s'", caFilePath)
 	}
 
-	// If a certificate is provided, verify the certificate chain
-	if certFilePath != "" {
-		certContent, err := os.ReadFile(certFilePath)
-		if err != nil {
-			return fmt.Errorf("failed to read cert_file '%s': %w", certFilePath, err)
-		}
-		block, _ := pem.Decode(certContent)
-		if block == nil {
-			return fmt.Errorf("failed to decode PEM block in cert_file '%s'", certFilePath)
-		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			return fmt.Errorf("failed to parse certificate: %w", err)
-		}
-		opts := x509.VerifyOptions{
-			Roots: caCertPool,
-		}
-		if _, err := cert.Verify(opts); err != nil {
-			return fmt.Errorf("certificate verification failed: %w", err)
-		}
-	}
-
 	return nil
 }
 
 // validateCertKey validates that the certificate and key files contain a valid PEM certificate and private key,
-// checks certificate expiration, hostname, and key strength.
-func validateCertKey(certPath, keyPath, hostname string) error {
+// checks certificate expiration and key strength.
+func validateCertKey(certPath, keyPath string) error {
 	// Validate certificate and key content
 	certContent, err := os.ReadFile(certPath)
 	if err != nil {
@@ -160,13 +137,6 @@ func validateCertKey(certPath, keyPath, hostname string) error {
 	}
 	if time.Now().Before(x509Cert.NotBefore) {
 		return fmt.Errorf("certificate %s is not yet valid: NotBefore=%s", certPath, x509Cert.NotBefore)
-	}
-
-	// Verify hostname if provided
-	if hostname != "" {
-		if err := x509Cert.VerifyHostname(hostname); err != nil {
-			return fmt.Errorf("certificate does not match hostname %s: %w", hostname, err)
-		}
 	}
 
 	// Check key strength

@@ -41,6 +41,16 @@ func (v *LoadBalancerValidator) Validate(cfg *config.Config) error {
 				return err
 			}
 		}
+
+		// Validate default_backend if configured for this load balancer
+		if defBackend := lb.GetDefaultBackend(); defBackend != nil {
+			if !util.IsValidIP(defBackend.IP) {
+				return fmt.Errorf("loadbalancers.%s '%s': invalid IP in default_backend: %s", lb.GetType(), name, defBackend.IP)
+			}
+			if !util.IsValidPort(int(defBackend.Port)) {
+				return fmt.Errorf("loadbalancers.%s '%s': invalid port in default_backend: %d", lb.GetType(), name, defBackend.Port)
+			}
+		}
 	}
 	return nil
 }

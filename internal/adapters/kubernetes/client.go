@@ -13,7 +13,6 @@ import (
 	"mlb-controller/internal/ports/logging"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/informers"
 	k8sclient "k8s.io/client-go/kubernetes"
@@ -276,11 +275,7 @@ func (k *KubernetesAdapter) ListServices() ([]model.Service, error) {
 func (k *KubernetesAdapter) GetNodeByName(ctx context.Context, name string) (model.Node, error) {
 	node, err := k.informerFactory.Core().V1().Nodes().Lister().Get(name)
 	if err != nil {
-		// Fallback to API if not in cache
-		node, err = k.client.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return model.Node{}, fmt.Errorf("failed to get node: %w", err)
-		}
+		return model.Node{}, fmt.Errorf("failed to get node %s from cache: %w", name, err)
 	}
 	return k.mapNode(node), nil
 }

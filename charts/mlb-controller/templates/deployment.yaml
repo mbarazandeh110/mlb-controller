@@ -51,7 +51,8 @@ spec:
               protocol: TCP
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /healthz
               port: metrics
             initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
@@ -61,7 +62,7 @@ spec:
           {{- if .Values.probes.readiness.enabled }}
           readinessProbe:
             httpGet:
-              path: {{ .Values.config.metrics.uri }}
+              path: /readyz
               port: metrics
             initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
             periodSeconds: {{ .Values.probes.readiness.periodSeconds }}

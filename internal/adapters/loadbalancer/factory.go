@@ -27,8 +27,15 @@ func NewLoadBalancerFactory() Factory {
 func (f *LoadBalancerFactory) CreateLoadBalancerAdapter(lbConfig config.LoadBalancerConfig, logger logging.Logger) (loadbalancer.LoadBalancerAdapter, error) {
 	switch lbConfig.GetType() {
 	case "nginx":
-		nginxCfg, ok := lbConfig.(config.NginxConfig)
-		if !ok {
+		var nginxCfg config.NginxConfig
+		switch c := lbConfig.(type) {
+		case config.NginxConfig:
+			nginxCfg = c
+		case *config.NginxConfig:
+			if c != nil {
+				nginxCfg = *c
+			}
+		default:
 			return nil, fmt.Errorf("failed to cast load balancer config to NginxConfig for %s", lbConfig.GetName())
 		}
 		return nginx.NewNginxAdapter(nginxCfg, logger)

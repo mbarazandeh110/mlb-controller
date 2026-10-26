@@ -48,19 +48,23 @@ func IsNetworkOverlap(ip1 string, mask1 int, ip2 string, mask2 int) bool {
 
 // ValidateIPReplacementList validates IP and network replacement lists.
 func ValidateIPReplacementList(list config.IPReplacementList, globalList config.GlobalIPReplacementList) error {
-	for i, net := range list.Nets {
-		if !IsValidIP(net.Source) || !IsValidIP(net.Target) {
-			return fmt.Errorf("invalid IP in nets: source=%s, target=%s", net.Source, net.Target)
+	for i, netCfg := range list.Nets {
+		if !IsValidIP(netCfg.Source) || !IsValidIP(netCfg.Target) {
+			return fmt.Errorf("invalid IP in nets: source=%s, target=%s", netCfg.Source, netCfg.Target)
 		}
-		if net.Mask < 0 || net.Mask > 32 {
-			return fmt.Errorf("nets.mask must be between 0 and 32")
+		maxMask := 32
+		if parsedIP := net.ParseIP(netCfg.Source); parsedIP != nil && parsedIP.To4() == nil {
+			maxMask = 128
 		}
-		for j, net2 := range list.Nets {
+		if netCfg.Mask < 0 || netCfg.Mask > maxMask {
+			return fmt.Errorf("nets.mask must be between 0 and %d", maxMask)
+		}
+		for j, netCfg2 := range list.Nets {
 			if i == j {
 				continue
 			}
-			if IsNetworkOverlap(net.Source, net.Mask, net2.Source, net2.Mask) {
-				return fmt.Errorf("nets.net source '%s/%d' and '%s/%d' must not overlap", net.Source, net.Mask, net2.Source, net2.Mask)
+			if IsNetworkOverlap(netCfg.Source, netCfg.Mask, netCfg2.Source, netCfg2.Mask) {
+				return fmt.Errorf("nets.net source '%s/%d' and '%s/%d' must not overlap", netCfg.Source, netCfg.Mask, netCfg2.Source, netCfg2.Mask)
 			}
 		}
 	}

@@ -159,7 +159,7 @@ func (k *KubernetesLeaderElection) SetCallbacks(callbacks leaderelection_ports.C
 }
 
 // GetLeaderAddr returns the address of the current leader by querying the Lease object.
-func (k *KubernetesLeaderElection) GetLeaderAddr() string {
+func (k *KubernetesLeaderElection) GetLeaderAddr(ctx context.Context) string {
 	if !k.config.Enabled {
 		id, err := os.Hostname()
 		if err != nil {
@@ -177,9 +177,6 @@ func (k *KubernetesLeaderElection) GetLeaderAddr() string {
 		}
 		return id
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
 
 	lease, err := k.client.CoordinationV1().Leases(k.config.LeaseNamespace).Get(ctx, k.config.LeaseName, metav1.GetOptions{})
 	if err != nil {

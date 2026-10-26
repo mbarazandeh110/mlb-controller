@@ -53,11 +53,17 @@ func NewContainer(configPath string) (*Container, error) {
 	}
 
 	// Initialize production logger
-	prodLoggerCfg := adapters_logging.LogConfig{Level: cfg.Log.Level, Format: cfg.Log.Format}
-	prodLogger, err := adapters_logging.New(prodLoggerCfg)
-	if err != nil {
-		bootstrapLogger.Error("Failed to initialize production logger", logging.Field{Key: "error", Value: err})
-		prodLogger = bootstrapLogger
+	var prodLogger logging.Logger
+	if !cfg.Log.Enabled {
+		prodLogger = adapters_logging.NewNop()
+	} else {
+		prodLoggerCfg := adapters_logging.LogConfig{Level: cfg.Log.Level, Format: cfg.Log.Format}
+		var err error
+		prodLogger, err = adapters_logging.New(prodLoggerCfg)
+		if err != nil {
+			bootstrapLogger.Error("Failed to initialize production logger", logging.Field{Key: "error", Value: err})
+			prodLogger = bootstrapLogger
+		}
 	}
 
 	// Initialize Kubernetes client

@@ -55,6 +55,11 @@ func New(cfg LogConfig) (ports.Logger, error) {
 	return &zapLogger{zap: logger}, nil
 }
 
+// NewNop creates a no-op logger that discards all log messages.
+func NewNop() ports.Logger {
+	return &zapLogger{zap: zap.NewNop()}
+}
+
 // parseLevel converts string level to zapcore.Level.
 func parseLevel(level string) (zapcore.Level, error) {
 	switch strings.ToLower(level) {
