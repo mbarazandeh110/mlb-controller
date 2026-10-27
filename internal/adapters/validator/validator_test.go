@@ -10,13 +10,14 @@ import (
 
 func TestNewCompositeValidator(t *testing.T) {
 	cv := NewCompositeValidator()
-	assert.Len(t, cv.validators, 10)
+	assert.Len(t, cv.validators, 9)
 }
 
 func TestCompositeValidator_Validate(t *testing.T) {
 	cfg := &config.Config{
 		GlobalUpstreamSyncPeriod: 10 * time.Second,
 	}
+	config.ApplyDefaultValues(cfg)
 	err := NewCompositeValidator().Validate(cfg)
 	assert.NoError(t, err)
 

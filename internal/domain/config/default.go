@@ -3,18 +3,20 @@ package config
 import "time"
 
 const (
-	GlobalUpstreamSyncPeriod    = 10 * time.Second
-	LeaderElectionLeaseDuration = 15 * time.Second
-	LeaderElectionRenewDeadline = 10 * time.Second
-	LeaderElectionRetryPeriod   = 2 * time.Second
-	LogLevel                    = "info"
-	LogFormant                  = "json"
-	MetricsPort                 = 9090
-	MetricsURI                  = "/metrics"
-	KubernetesResyncPeriod      = 30 * time.Second
-	RequestPoolSize             = 10
-	RequestTimeOut              = 30 * time.Second
-	FailTimeout                 = 60 * time.Second
+	GlobalUpstreamSyncPeriod     = 10 * time.Second
+	LeaderElectionLeaseDuration  = 15 * time.Second
+	LeaderElectionRenewDeadline  = 10 * time.Second
+	LeaderElectionRetryPeriod    = 2 * time.Second
+	LogLevel                     = "info"
+	LogFormat                    = "json"
+	LeaderElectionLeaseName      = "mlb-controller-lease"
+	LeaderElectionLeaseNamespace = "default"
+	MetricsPort                  = 9090
+	MetricsURI                   = "/metrics"
+	KubernetesResyncPeriod       = 30 * time.Second
+	RequestPoolSize              = 10
+	RequestTimeOut               = 30 * time.Second
+	FailTimeout                  = 60 * time.Second
 )
 
 // ApplyDefaultValues sets default values for the configuration.
@@ -27,6 +29,12 @@ func ApplyDefaultValues(cfg *Config) {
 	// Set global defaults
 	if cfg.GlobalUpstreamSyncPeriod == 0 {
 		cfg.GlobalUpstreamSyncPeriod = GlobalUpstreamSyncPeriod
+	}
+	if cfg.LeaderElection.LeaseName == "" {
+		cfg.LeaderElection.LeaseName = LeaderElectionLeaseName
+	}
+	if cfg.LeaderElection.LeaseNamespace == "" {
+		cfg.LeaderElection.LeaseNamespace = LeaderElectionLeaseNamespace
 	}
 	if cfg.LeaderElection.LeaseDuration == 0 {
 		cfg.LeaderElection.LeaseDuration = LeaderElectionLeaseDuration
@@ -41,7 +49,7 @@ func ApplyDefaultValues(cfg *Config) {
 		cfg.Log.Level = LogLevel
 	}
 	if cfg.Log.Format == "" {
-		cfg.Log.Format = LogFormant
+		cfg.Log.Format = LogFormat
 	}
 	if cfg.Metrics.Port == 0 {
 		cfg.Metrics.Port = MetricsPort

@@ -72,25 +72,41 @@ func (v *LoadBalancerValidator) validateIPReplacementList(list config.IPReplacem
 		return fmt.Errorf("loadbalancers.%s '%s': %w", lbType, name, err)
 	}
 
-	// Check for overlaps with global lists
+	// Collect referenced global nets and check for overlaps among themselves and with local nets
+	var allReferencedNets []config.NetConfig
 	for _, globalNetName := range list.GlobalNets {
 		for _, globalNet := range globalList.Net {
 			if globalNet.Name == globalNetName {
-				for _, gNet := range globalNet.Nets {
-					for _, lNet := range list.Nets {
-						if util.IsNetworkOverlap(gNet.Source, gNet.Mask, lNet.Source, lNet.Mask) {
-							return fmt.Errorf("network overlap detected: global_nets '%s/%d' overlaps with nets '%s/%d' in load balancer '%s'", gNet.Source, gNet.Mask, lNet.Source, lNet.Mask, name)
-						}
-					}
-				}
+				allReferencedNets = append(allReferencedNets, globalNet.Nets...)
+			}
+		}
+	}
+	for i := 0; i < len(allReferencedNets); i++ {
+		for j := i + 1; j < len(allReferencedNets); j++ {
+			n1 := allReferencedNets[i]
+			n2 := allReferencedNets[j]
+			if util.IsNetworkOverlap(n1.Source, n1.Mask, n2.Source, n2.Mask) {
+				return fmt.Errorf("network overlap detected between referenced global nets '%s/%d' and '%s/%d' in load balancer '%s'", n1.Source, n1.Mask, n2.Source, n2.Mask, name)
+			}
+		}
+		for _, lNet := range list.Nets {
+			n1 := allReferencedNets[i]
+			if util.IsNetworkOverlap(n1.Source, n1.Mask, lNet.Source, lNet.Mask) {
+				return fmt.Errorf("network overlap detected: global_nets '%s/%d' overlaps with nets '%s/%d' in load balancer '%s'", n1.Source, n1.Mask, lNet.Source, lNet.Mask, name)
 			}
 		}
 	}
 
+	// Check for duplicate source IPs across referenced global IPs and overlap with local IPs
+	referencedIPs := make(map[string]struct{})
 	for _, globalIPName := range list.GlobalIPs {
 		for _, globalIP := range globalList.IP {
 			if globalIP.Name == globalIPName {
 				for _, gIP := range globalIP.IPs {
+					if _, exists := referencedIPs[gIP.Source]; exists {
+						return fmt.Errorf("duplicate source IP '%s' detected across referenced global_ips in load balancer '%s'", gIP.Source, name)
+					}
+					referencedIPs[gIP.Source] = struct{}{}
 					for _, lIP := range list.IPs {
 						if gIP.Source == lIP.Source {
 							return fmt.Errorf("IP overlap detected: global_ips '%s' overlaps with ips '%s' in load balancer '%s'", gIP.Source, lIP.Source, name)

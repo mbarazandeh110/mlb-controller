@@ -351,12 +351,17 @@ func (k *KubernetesAdapter) isPodReady(pod *corev1.Pod) bool {
 func (k *KubernetesAdapter) getNodePort(svc *corev1.Service) int32 {
 	if nodePortStr, exists := svc.Labels["mlb-port"]; exists {
 		num64, err := strconv.ParseInt(nodePortStr, 10, 32)
-		if err == nil {
+		if err == nil && num64 >= 1 && num64 <= 65535 {
 			return int32(num64)
 		}
+		// mlb-port was explicitly specified but is invalid; do not fall back to Spec.Ports
+		return 0
 	}
 	if len(svc.Spec.Ports) > 0 && (svc.Spec.Type == corev1.ServiceTypeNodePort || svc.Spec.Type == corev1.ServiceTypeLoadBalancer) {
-		return svc.Spec.Ports[0].NodePort
+		np := svc.Spec.Ports[0].NodePort
+		if np >= 1 && np <= 65535 {
+			return np
+		}
 	}
 	return 0
 }

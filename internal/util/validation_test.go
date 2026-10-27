@@ -51,8 +51,9 @@ func TestIsValidPort(t *testing.T) {
 		want bool
 	}{
 		{"Valid Port", 8080, true},
-		{"Min Port", 0, true},
+		{"Min Port", 1, true},
 		{"Max Port", 65535, true},
+		{"Zero Port", 0, false},
 		{"Negative", -1, false},
 		{"Too High", 65536, false},
 	}

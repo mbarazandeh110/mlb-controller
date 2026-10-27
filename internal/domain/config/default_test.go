@@ -12,6 +12,8 @@ func TestApplyDefaultValues(t *testing.T) {
 	ApplyDefaultValues(cfg)
 
 	assert.Equal(t, 10*time.Second, cfg.GlobalUpstreamSyncPeriod)
+	assert.Equal(t, "mlb-controller-lease", cfg.LeaderElection.LeaseName)
+	assert.Equal(t, "default", cfg.LeaderElection.LeaseNamespace)
 	assert.Equal(t, 15*time.Second, cfg.LeaderElection.LeaseDuration)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.Equal(t, "json", cfg.Log.Format)

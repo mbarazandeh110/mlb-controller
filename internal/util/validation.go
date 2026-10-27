@@ -28,9 +28,9 @@ func IsValidDomain(hostname string) bool {
 	return domainRegex.MatchString(hostname)
 }
 
-// IsValidPort checks if the given port is within the valid range (0-65535).
+// IsValidPort checks if the given port is within the valid range (1-65535).
 func IsValidPort(port int) bool {
-	return port >= 0 && port <= 65535
+	return port >= 1 && port <= 65535
 }
 
 // IsNetworkOverlap checks if two networks overlap based on their IP and mask.

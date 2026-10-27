@@ -26,16 +26,12 @@ func NewCompositeValidator() *CompositeValidator {
 			&LoadBalancerValidator{},
 			&NginxValidator{},
 			&EnvoyValidator{},
-			&RequestPoolValidator{},
 		},
 	}
 }
 
 // Validate runs all registered validators.
 func (cv *CompositeValidator) Validate(cfg *config.Config) error {
-	// Apply default values
-	config.ApplyDefaultValues(cfg)
-
 	for _, v := range cv.validators {
 		if err := v.Validate(cfg); err != nil {
 			return fmt.Errorf("validation failed: %w", err)
@@ -70,15 +66,6 @@ func (v *GlobalConfigValidator) Validate(cfg *config.Config) error {
 		if lb.GetRequestTimeOut() <= 0*time.Second { // After defaults
 			return fmt.Errorf("loadbalancer '%s': request_timeout must be non-negative, got: %d", lb.GetName(), lb.GetRequestTimeOut())
 		}
-	}
-	return nil
-}
-
-type RequestPoolValidator struct{}
-
-func (v *RequestPoolValidator) Validate(cfg *config.Config) error {
-	if cfg.RequestPoolSize <= 0 {
-		return fmt.Errorf("request_pool_size must be positive")
 	}
 	return nil
 }

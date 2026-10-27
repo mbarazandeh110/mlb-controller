@@ -133,7 +133,7 @@ func (a *NginxAdapter) SyncUpstream(ctx context.Context, upstream model.Upstream
 
 			// Get current backends for this upstream (support both named and single flat format)
 			currentBackends := allBackends[upstream.Name]
-			if len(currentBackends) == 0 && len(allBackends[""]) > 0 {
+			if len(currentBackends) == 0 && len(allBackends) == 1 && len(allBackends[""]) > 0 {
 				currentBackends = allBackends[""]
 			}
 

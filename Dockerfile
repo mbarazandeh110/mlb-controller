@@ -25,7 +25,7 @@ COPY --from=builder --chown=65532:65532 /app/configs /configs
 
 ENV CONFIG_PATH=/configs/config.yaml
 
-EXPOSE 8080 9090
+EXPOSE 9090
 
 ENTRYPOINT ["/mlb-controller"]
 

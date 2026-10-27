@@ -14,6 +14,12 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	configPath := flag.String("config", "", "path to configuration file")
 	flag.Parse()
 
@@ -38,9 +44,10 @@ func main() {
 	if err != nil {
 		tempLogger, _ := logging.New(logging.LogConfig{Level: "info", Format: "json"})
 		if tempLogger != nil {
-			tempLogger.Fatal("Failed to initialize DI container", logging_ports.Field{Key: "error", Value: err})
+			tempLogger.Error("Failed to initialize DI container", logging_ports.Field{Key: "error", Value: err})
+			_ = tempLogger.Sync()
 		}
-		os.Exit(1)
+		return err
 	}
 
 	// مدیریت چرخه حیات (Lifecycle Management) و پاکسازی منابع با Timeout قطعی
@@ -55,7 +62,7 @@ func main() {
 			container.Logger.Info("Application stopped successfully")
 		}
 
-		container.Logger.Sync()
+		_ = container.Logger.Sync()
 	}()
 
 	container.Logger.Info("Starting mlb-controller...")
@@ -64,6 +71,8 @@ func main() {
 	// با دریافت SIGTERM از سمت Kubelet، این Context کنسل شده و روتین‌های داخلی متوقف می‌شوند
 	if err := container.App.Start(ctx); err != nil {
 		container.Logger.Error("Application exited with error", logging_ports.Field{Key: "error", Value: err})
-		os.Exit(1)
+		return err
 	}
+
+	return nil
 }

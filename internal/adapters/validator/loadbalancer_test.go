@@ -253,6 +253,36 @@ func TestLoadBalancerValidator_validateIPReplacementList(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "IP overlap detected")
 	})
+
+	t.Run("MultipleGlobalNets_OverlapBetweenThem", func(t *testing.T) {
+		list := config.IPReplacementList{
+			GlobalNets: []string{"g1", "g2"},
+		}
+		globalList := config.GlobalIPReplacementList{
+			Net: []config.GlobalNetReplacement{
+				{Name: "g1", Nets: []config.NetConfig{{Source: "192.168.1.0", Target: "10.0.0.0", Mask: 24}}},
+				{Name: "g2", Nets: []config.NetConfig{{Source: "192.168.1.128", Target: "10.0.1.0", Mask: 25}}},
+			},
+		}
+		err := validator.validateIPReplacementList(list, globalList, "test-lb", "nginx")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "network overlap detected between referenced global nets")
+	})
+
+	t.Run("MultipleGlobalIPs_DuplicateSourceAcrossGroups", func(t *testing.T) {
+		list := config.IPReplacementList{
+			GlobalIPs: []string{"ip1", "ip2"},
+		}
+		globalList := config.GlobalIPReplacementList{
+			IP: []config.GlobalIPReplacement{
+				{Name: "ip1", IPs: []config.IPConfig{{Source: "10.0.0.1", Target: "172.16.0.1"}}},
+				{Name: "ip2", IPs: []config.IPConfig{{Source: "10.0.0.1", Target: "172.16.0.2"}}},
+			},
+		}
+		err := validator.validateIPReplacementList(list, globalList, "test-lb", "nginx")
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "duplicate source IP '10.0.0.1' detected across referenced global_ips")
+	})
 }
 
 // writeTempFile creates a temporary file with the given content and returns its path.

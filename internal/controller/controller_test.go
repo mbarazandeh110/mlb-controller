@@ -497,13 +497,16 @@ func TestController_SyncUpstreams_BulkSync(t *testing.T) {
 		{Name: "pod-1", Ready: true, NodeName: "node1"},
 	}
 
-	ctrl.stateMutex.Lock()
-	ctrl.state.Services["default/test-svc"] = svc
-	ctrl.stateMutex.Unlock()
+	// Do not pre-populate state.Services; verify that SyncUpstreams populates both state.Services and lastKnownServices
 	k8sPort.SetService(svc)
 
 	err := ctrl.SyncUpstreams(ctx)
 	require.NoError(t, err)
+
+	ctrl.stateMutex.RLock()
+	assert.Contains(t, ctrl.state.Services, "default/test-svc")
+	assert.Contains(t, ctrl.lastKnownServices, "default/test-svc")
+	ctrl.stateMutex.RUnlock()
 
 	all := lbAdapter.GetAllUpstreams()
 	assert.Contains(t, all, "bulk-upstream")
@@ -541,19 +544,16 @@ func TestController_WeightAggregation_MultiPodPerNode(t *testing.T) {
 	up := synced[0]
 
 	assert.Equal(t, "multi-pod-upstream", up.Name)
-	// Upstream emits backends for all matching pods
-	assert.Len(t, up.Backends, 3)
+	// Upstream aggregates backends running on the same node by summing their weights
+	assert.Len(t, up.Backends, 2)
 
-	var node1Count, node2Count int
 	for _, b := range up.Backends {
 		if b.IP == "192.168.1.10" {
-			node1Count++
+			assert.Equal(t, 2, b.Weight, "Node1 with 2 pods should have weight 2")
 		} else if b.IP == "192.168.1.20" {
-			node2Count++
+			assert.Equal(t, 1, b.Weight, "Node2 with 1 pod should have weight 1")
 		}
 	}
-	assert.Equal(t, 2, node1Count, "Expected 2 entries for node1 to be aggregated by LB adapter")
-	assert.Equal(t, 1, node2Count, "Expected 1 entry for node2")
 }
 
 func TestController_IPReplacementIntegration(t *testing.T) {

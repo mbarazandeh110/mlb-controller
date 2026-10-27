@@ -57,15 +57,15 @@ func (v *GlobalIPReplacementValidator) Validate(cfg *config.Config) error {
 		}
 	}
 
-	// Validate IPs
-	sourceIPs := make(map[string]struct{})
+	// Validate IPs (uniqueness scoped per group)
 	for _, ip := range cfg.GlobalIPReplacementList.IP {
+		sourceIPs := make(map[string]struct{})
 		for _, i := range ip.IPs {
 			if !util.IsValidIP(i.Source) || !util.IsValidIP(i.Target) {
 				return fmt.Errorf("invalid IP in global_ip_replacement_list.ip: source=%s, target=%s", i.Source, i.Target)
 			}
 			if _, exists := sourceIPs[i.Source]; exists {
-				return fmt.Errorf("global_ip_replacement_list.ip source '%s' must be unique", i.Source)
+				return fmt.Errorf("global_ip_replacement_list.ip source '%s' must be unique in group '%s'", i.Source, ip.Name)
 			}
 			sourceIPs[i.Source] = struct{}{}
 		}

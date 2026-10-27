@@ -162,6 +162,76 @@ func TestKubernetesAdapter_GetNodePort(t *testing.T) {
 		}
 		assert.Equal(t, int32(0), adapter.getNodePort(svc))
 	})
+
+	t.Run("Invalid label port string does not fall back to Spec.Ports", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{"mlb-port": "invalid-port"},
+			},
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeNodePort,
+				Ports: []corev1.ServicePort{{NodePort: 32000}},
+			},
+		}
+		assert.Equal(t, int32(0), adapter.getNodePort(svc))
+	})
+
+	t.Run("Zero label port does not fall back to Spec.Ports", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{"mlb-port": "0"},
+			},
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeNodePort,
+				Ports: []corev1.ServicePort{{NodePort: 32000}},
+			},
+		}
+		assert.Equal(t, int32(0), adapter.getNodePort(svc))
+	})
+
+	t.Run("Negative label port returns 0 without fallback", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{"mlb-port": "-80"},
+			},
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeNodePort,
+				Ports: []corev1.ServicePort{{NodePort: 32000}},
+			},
+		}
+		assert.Equal(t, int32(0), adapter.getNodePort(svc))
+	})
+
+	t.Run("Out of range label port (>65535) returns 0 without fallback", func(t *testing.T) {
+		svc := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{"mlb-port": "70000"},
+			},
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeNodePort,
+				Ports: []corev1.ServicePort{{NodePort: 32000}},
+			},
+		}
+		assert.Equal(t, int32(0), adapter.getNodePort(svc))
+	})
+
+	t.Run("Fallback NodePort invalid (>65535 or <=0) returns 0", func(t *testing.T) {
+		svc := &corev1.Service{
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeNodePort,
+				Ports: []corev1.ServicePort{{NodePort: 0}},
+			},
+		}
+		assert.Equal(t, int32(0), adapter.getNodePort(svc))
+
+		svc2 := &corev1.Service{
+			Spec: corev1.ServiceSpec{
+				Type:  corev1.ServiceTypeNodePort,
+				Ports: []corev1.ServicePort{{NodePort: 70000}},
+			},
+		}
+		assert.Equal(t, int32(0), adapter.getNodePort(svc2))
+	})
 }
 
 func TestKubernetesAdapter_IsPodReady(t *testing.T) {

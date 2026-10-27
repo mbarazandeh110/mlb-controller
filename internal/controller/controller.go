@@ -525,6 +525,29 @@ func (c *ControllerImpl) syncSingleLoadBalancer(ctx context.Context, lbName stri
 		return fmt.Errorf("failed to list services from lister for LB %s: %w", lbName, err)
 	}
 
+	// Populate/sync c.state.Services and c.lastKnownServices for this loadbalancer
+	currentSvcKeys := make(map[string]struct{})
+	c.stateMutex.Lock()
+	for _, svc := range services {
+		if svc.Labels["mlb-loadbalancer-name"] != lbName {
+			continue
+		}
+		key := fmt.Sprintf("%s/%s", svc.Namespace, svc.Name)
+		currentSvcKeys[key] = struct{}{}
+		c.state.Services[key] = svc
+		if _, exists := c.lastKnownServices[key]; !exists {
+			c.lastKnownServices[key] = svc
+		}
+	}
+	for key, svc := range c.state.Services {
+		if svc.Labels["mlb-loadbalancer-name"] == lbName {
+			if _, exists := currentSvcKeys[key]; !exists {
+				delete(c.state.Services, key)
+			}
+		}
+	}
+	c.stateMutex.Unlock()
+
 	desiredState := make(map[string]model.Upstream)
 
 	for _, svc := range services {
@@ -726,7 +749,7 @@ func (c *ControllerImpl) buildUpstream(ctx context.Context, svc model.Service, p
 	return &model.Upstream{
 		Name:         upstreamName,
 		LoadBalancer: lbName,
-		Backends:     backends,
+		Backends:     c.mergeBackends(backends, nil),
 		Type:         c.getLoadBalancerType(lbName),
 		Config:       lbConfig,
 	}, nil

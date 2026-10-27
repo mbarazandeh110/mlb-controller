@@ -301,3 +301,28 @@ func TestPrometheusAdapter_StartAndStop(t *testing.T) {
 	nilAdapter := &PrometheusAdapter{}
 	assert.NoError(t, nilAdapter.Stop(context.Background()))
 }
+
+func TestPrometheusAdapter_NewMetrics(t *testing.T) {
+	adapter := NewPrometheusAdapter(&fakeLogger{}, nil, domain.MetricsConfig{
+		Enabled: true,
+		Port:    9090,
+		URI:     "/metrics",
+	})
+
+	counter := adapter.NewCounter("test_counter", "help counter", nil)
+	require.NotNil(t, counter)
+	counter.Inc()
+	counter.Add(5)
+
+	gauge := adapter.NewGauge("test_gauge", "help gauge", nil)
+	require.NotNil(t, gauge)
+	gauge.Set(10)
+	gauge.Inc()
+	gauge.Dec()
+	gauge.Add(2)
+	gauge.Sub(1)
+
+	histogram := adapter.NewHistogram("test_histogram", "help histogram", nil)
+	require.NotNil(t, histogram)
+	histogram.Observe(0.5)
+}

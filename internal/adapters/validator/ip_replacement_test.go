@@ -233,7 +233,7 @@ func TestGlobalIPReplacementValidator_Validate(t *testing.T) {
 			errorMsg:    "invalid IP in global_ip_replacement_list.ip: source=invalid-ip, target=10.0.0.1",
 		},
 		{
-			name: "Duplicate Source IP",
+			name: "Duplicate Source IP in Same Group",
 			config: &config.Config{
 				GlobalIPReplacementList: config.GlobalIPReplacementList{
 					IP: []config.GlobalIPReplacement{
@@ -248,7 +248,25 @@ func TestGlobalIPReplacementValidator_Validate(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "global_ip_replacement_list.ip source '192.168.1.1' must be unique",
+			errorMsg:    "global_ip_replacement_list.ip source '192.168.1.1' must be unique in group 'ip1'",
+		},
+		{
+			name: "Same Source IP across different groups is allowed",
+			config: &config.Config{
+				GlobalIPReplacementList: config.GlobalIPReplacementList{
+					IP: []config.GlobalIPReplacement{
+						{
+							Name: "group1",
+							IPs:  []config.IPConfig{{Source: "192.168.1.1", Target: "10.0.0.1"}},
+						},
+						{
+							Name: "group2",
+							IPs:  []config.IPConfig{{Source: "192.168.1.1", Target: "10.0.0.2"}},
+						},
+					},
+				},
+			},
+			expectError: false,
 		},
 		{
 			name: "Empty Lists",

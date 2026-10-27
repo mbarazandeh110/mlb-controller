@@ -169,13 +169,6 @@ func (p *PrometheusAdapter) NewCounter(name, help string, labels []string) metri
 		Name: name,
 		Help: help,
 	}
-	if len(labels) > 0 {
-		constLabels := make(prometheus.Labels, len(labels))
-		for _, l := range labels {
-			constLabels[l] = ""
-		}
-		opts.ConstLabels = constLabels
-	}
 	counter := prometheus.NewCounter(opts)
 	p.registry.MustRegister(counter)
 	return &prometheusCounter{promCounter: counter}
@@ -186,13 +179,6 @@ func (p *PrometheusAdapter) NewGauge(name, help string, labels []string) metrics
 		Name: name,
 		Help: help,
 	}
-	if len(labels) > 0 {
-		constLabels := make(prometheus.Labels, len(labels))
-		for _, l := range labels {
-			constLabels[l] = ""
-		}
-		opts.ConstLabels = constLabels
-	}
 	gauge := prometheus.NewGauge(opts)
 	p.registry.MustRegister(gauge)
 	return &prometheusGauge{promGauge: gauge}
@@ -202,13 +188,6 @@ func (p *PrometheusAdapter) NewHistogram(name, help string, labels []string) met
 	opts := prometheus.HistogramOpts{
 		Name: name,
 		Help: help,
-	}
-	if len(labels) > 0 {
-		constLabels := make(prometheus.Labels, len(labels))
-		for _, l := range labels {
-			constLabels[l] = ""
-		}
-		opts.ConstLabels = constLabels
 	}
 	histogram := prometheus.NewHistogram(opts)
 	p.registry.MustRegister(histogram)
