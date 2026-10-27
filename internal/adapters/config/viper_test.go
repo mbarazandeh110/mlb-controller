@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"os"
 	"reflect"
 	"testing"
@@ -81,8 +82,9 @@ loadbalancers:
 	assert.NoError(t, err)
 	tmpFile.Close()
 
+	ctx := context.Background()
 	loader := NewViperLoader(tmpFile.Name(), certificate_adapter.NewFileLoader())
-	cfg, err := loader.Load()
+	cfg, err := loader.Load(ctx)
 	assert.NoError(t, err)
 	assert.NotNil(t, cfg)
 	assert.Equal(t, 5*time.Second, cfg.GlobalUpstreamSyncPeriod)
@@ -90,7 +92,7 @@ loadbalancers:
 
 	// Test invalid config
 	loader = NewViperLoader("invalid.yaml", certificate_adapter.NewFileLoader())
-	_, err = loader.Load()
+	_, err = loader.Load(ctx)
 	assert.Error(t, err)
 }
 

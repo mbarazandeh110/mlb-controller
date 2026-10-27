@@ -1,7 +1,11 @@
 package config
 
-import domain "mlb-controller/internal/domain/config"
+import (
+	"context"
+
+	domain "mlb-controller/internal/domain/config"
+)
 
 type Loader interface {
-	Load() (*domain.Config, error)
+	Load(ctx context.Context) (*domain.Config, error)
 }

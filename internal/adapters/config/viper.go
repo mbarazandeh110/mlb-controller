@@ -39,9 +39,15 @@ func StringToDurationHookFunc() mapstructure.DecodeHookFuncType {
 	}
 }
 
-func (l *ViperLoader) Load() (*domain.Config, error) {
+func (l *ViperLoader) Load(ctx context.Context) (*domain.Config, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	v := viper.New()
 	v.SetConfigFile(l.path)
+	v.AutomaticEnv()
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
@@ -88,7 +94,7 @@ func (l *ViperLoader) Load() (*domain.Config, error) {
 		DefaultBackend:           rawConfig.DefaultBackend,
 	}
 
-	certCtx, certCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	certCtx, certCancel := context.WithTimeout(ctx, 10*time.Second)
 	defer certCancel()
 
 	// Unmarshal loadbalancers based on type

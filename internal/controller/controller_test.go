@@ -139,24 +139,21 @@ func (f *fakeK8sPort) WatchServices(ctx context.Context, requiredLabels map[stri
 	f.mu.Lock()
 	f.svcEventsCh = events
 	f.mu.Unlock()
-	<-ctx.Done()
-	return ctx.Err()
+	return nil
 }
 
 func (f *fakeK8sPort) WatchPods(ctx context.Context, events chan<- kubernetes.PodEvent) error {
 	f.mu.Lock()
 	f.podEventsCh = events
 	f.mu.Unlock()
-	<-ctx.Done()
-	return ctx.Err()
+	return nil
 }
 
 func (f *fakeK8sPort) WatchNodes(ctx context.Context, events chan<- kubernetes.NodeEvent) error {
 	f.mu.Lock()
 	f.nodeEventsCh = events
 	f.mu.Unlock()
-	<-ctx.Done()
-	return ctx.Err()
+	return nil
 }
 
 func (f *fakeK8sPort) GetPodsForSelector(ctx context.Context, namespace string, selector map[string]string) ([]model.Pod, error) {

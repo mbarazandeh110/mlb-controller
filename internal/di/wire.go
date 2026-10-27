@@ -2,6 +2,7 @@
 package di
 
 import (
+	"context"
 	"fmt"
 
 	adapters_certificate "mlb-controller/internal/adapters/certificate"
@@ -34,7 +35,7 @@ type Container struct {
 }
 
 // NewContainer creates and wires dependencies.
-func NewContainer(configPath string) (*Container, error) {
+func NewContainer(ctx context.Context, configPath string) (*Container, error) {
 	// Initialize bootstrap logger
 	bootstrapLogger, err := adapters_logging.New(adapters_logging.LogConfig{Level: "info", Format: "json"})
 	if err != nil {
@@ -46,7 +47,7 @@ func NewContainer(configPath string) (*Container, error) {
 
 	// Load config to determine production logger, metrics, and leader election settings
 	loader := adapters_config.NewViperLoader(configPath, certLoader)
-	cfg, err := loader.Load()
+	cfg, err := loader.Load(ctx)
 	if err != nil {
 		bootstrapLogger.Error("Failed to load config", logging.Field{Key: "error", Value: err})
 		return nil, fmt.Errorf("failed to load config: %w", err)

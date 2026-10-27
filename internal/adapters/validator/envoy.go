@@ -10,10 +10,19 @@ type EnvoyValidator struct{}
 
 func (v *EnvoyValidator) Validate(cfg *config.Config) error {
 	for _, lb := range cfg.LoadBalancers.LoadBalancers {
-		if envoy, ok := lb.(config.EnvoyConfig); ok {
-			if err := v.validateEnvoyConfig(envoy); err != nil {
-				return fmt.Errorf("envoy '%s': %w", envoy.Name, err)
+		var envoy config.EnvoyConfig
+		switch c := lb.(type) {
+		case config.EnvoyConfig:
+			envoy = c
+		case *config.EnvoyConfig:
+			if c != nil {
+				envoy = *c
 			}
+		default:
+			continue
+		}
+		if err := v.validateEnvoyConfig(envoy); err != nil {
+			return fmt.Errorf("envoy '%s': %w", envoy.Name, err)
 		}
 	}
 	return nil

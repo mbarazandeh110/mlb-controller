@@ -68,6 +68,16 @@ func ApplyDefaultValues(cfg *Config) {
 				concrete.DefaultBackend = cfg.DefaultBackend
 			}
 			cfg.LoadBalancers.LoadBalancers[i] = concrete
+		case *NginxConfig:
+			if concrete != nil {
+				if !concrete.AllowEmptyUpstream && cfg.AllowEmptyUpstream {
+					concrete.AllowEmptyUpstream = true
+				}
+				if concrete.DefaultBackend == nil && cfg.DefaultBackend != nil {
+					concrete.DefaultBackend = cfg.DefaultBackend
+				}
+				cfg.LoadBalancers.LoadBalancers[i] = concrete
+			}
 		case EnvoyConfig:
 			if !concrete.AllowEmptyUpstream && cfg.AllowEmptyUpstream {
 				concrete.AllowEmptyUpstream = true
@@ -76,6 +86,16 @@ func ApplyDefaultValues(cfg *Config) {
 				concrete.DefaultBackend = cfg.DefaultBackend
 			}
 			cfg.LoadBalancers.LoadBalancers[i] = concrete
+		case *EnvoyConfig:
+			if concrete != nil {
+				if !concrete.AllowEmptyUpstream && cfg.AllowEmptyUpstream {
+					concrete.AllowEmptyUpstream = true
+				}
+				if concrete.DefaultBackend == nil && cfg.DefaultBackend != nil {
+					concrete.DefaultBackend = cfg.DefaultBackend
+				}
+				cfg.LoadBalancers.LoadBalancers[i] = concrete
+			}
 		default:
 			cfg.LoadBalancers.LoadBalancers[i] = lbWithDefaults
 		}

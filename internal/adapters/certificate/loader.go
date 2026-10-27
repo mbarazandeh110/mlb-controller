@@ -74,7 +74,7 @@ func validateCert(certPath, keyPath, caPath, hostname string) error {
 
 	// Validate certificate and key pair
 	if certPath != "" {
-		if err := validateCertKey(certPath, keyPath); err != nil {
+		if err := validateCertKey(certPath, keyPath, hostname); err != nil {
 			return fmt.Errorf("invalid certificate: %w", err)
 		}
 	}
@@ -107,8 +107,8 @@ func validateCA(caFilePath string) error {
 }
 
 // validateCertKey validates that the certificate and key files contain a valid PEM certificate and private key,
-// checks certificate expiration and key strength.
-func validateCertKey(certPath, keyPath string) error {
+// checks certificate expiration, hostname/SAN match, and key strength.
+func validateCertKey(certPath, keyPath, hostname string) error {
 	// Validate certificate and key content
 	certContent, err := os.ReadFile(certPath)
 	if err != nil {
@@ -137,6 +137,13 @@ func validateCertKey(certPath, keyPath string) error {
 	}
 	if time.Now().Before(x509Cert.NotBefore) {
 		return fmt.Errorf("certificate %s is not yet valid: NotBefore=%s", certPath, x509Cert.NotBefore)
+	}
+
+	// Check hostname / SAN matching
+	if hostname != "" {
+		if err := x509Cert.VerifyHostname(hostname); err != nil {
+			return fmt.Errorf("certificate %s SAN does not match hostname %s: %w", certPath, hostname, err)
+		}
 	}
 
 	// Check key strength

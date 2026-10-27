@@ -304,6 +304,9 @@ func TestSyncUpstream(t *testing.T) {
 		var activeRequests int32
 		var maxObservedActive int32
 		var semMu sync.Mutex
+		poolLimit := 2
+		releaseFirstTwo := make(chan struct{})
+		var once sync.Once
 
 		semServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			semMu.Lock()
@@ -311,10 +314,16 @@ func TestSyncUpstream(t *testing.T) {
 			if activeRequests > maxObservedActive {
 				maxObservedActive = activeRequests
 			}
+			if activeRequests >= int32(poolLimit) {
+				once.Do(func() { close(releaseFirstTwo) })
+			}
 			semMu.Unlock()
 
-			// Artificially hold connection briefly to test concurrent ceiling
-			time.Sleep(30 * time.Millisecond)
+			// Hold connection until pool limit is observed, verifying concurrency ceiling
+			select {
+			case <-releaseFirstTwo:
+			case <-r.Context().Done():
+			}
 
 			semMu.Lock()
 			activeRequests--
@@ -331,7 +340,6 @@ func TestSyncUpstream(t *testing.T) {
 		uSem, _ := url.Parse(semServer.URL)
 		pSem, _ := strconv.Atoi(uSem.Port())
 
-		poolLimit := 2
 		semCfg := config.NginxConfig{
 			Type:            "nginx",
 			Name:            "sem-nginx",

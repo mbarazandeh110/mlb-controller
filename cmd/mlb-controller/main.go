@@ -14,14 +14,23 @@ import (
 )
 
 func main() {
-	configPath := flag.String("config", "/etc/mlb-controller/config.yaml", "path to configuration file")
+	configPath := flag.String("config", "", "path to configuration file")
 	flag.Parse()
+
+	resolvedConfigPath := *configPath
+	if resolvedConfigPath == "" {
+		if envPath := os.Getenv("CONFIG_PATH"); envPath != "" {
+			resolvedConfigPath = envPath
+		} else {
+			resolvedConfigPath = "/etc/mlb-controller/config.yaml"
+		}
+	}
 
 	// ایجاد Context متصل به سیگنال‌های سیستم‌عامل برای Graceful Shutdown
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	container, err := di.NewContainer(*configPath)
+	container, err := di.NewContainer(ctx, resolvedConfigPath)
 	if err != nil {
 		tempLogger, _ := logging.New(logging.LogConfig{Level: "info", Format: "json"})
 		if tempLogger != nil {

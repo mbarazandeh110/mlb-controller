@@ -28,4 +28,4 @@ ENV CONFIG_PATH=/configs/config.yaml
 EXPOSE 8080 9090
 
 ENTRYPOINT ["/mlb-controller"]
-CMD ["--config=/etc/mlb-controller/config.yaml"]
+CMD ["--config=/configs/config.yaml"]

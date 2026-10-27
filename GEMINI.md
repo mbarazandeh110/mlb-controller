@@ -62,12 +62,16 @@ Always use the `Makefile` targets to verify changes:
 
 ---
 
-## 4. Current Priority & Known Technical Debt (Phase 1 Focus: Core & NGINX)
+## 4. Current Status & Next Roadmap Priorities
 
-Before implementing Envoy or HAProxy adapters, the following known issues in Core and NGINX must be resolved:
+### Phase 1 Focus (Core, NGINX, Reconciliation & Safety Net) - COMPLETED
+All core architectural and reconciliation bugs have been resolved and hardened:
+1. **Full Test Suite Operational**: All tests passing with `-race`, deterministic waiting, and zero arbitrary `time.Sleep`.
+2. **NGINX Adapter Hardened**: Full TLS/mTLS, RootCA certificate pool validation, SAN verification, concurrency semaphore enforcement in single and bulk reconciliation, robust URL query parameter handling, and IPv4/IPv6 support.
+3. **Robust Safety Net & Fail-Static**: Automatic fallback to `default_backend` or preserving existing backends on zero ready pods (`allow_empty_upstream: false`) and on Kubernetes retrieval errors, preventing accidental traffic draining or orphan pruning.
+4. **State Consistency & 12-Factor Lifecycle**: Pure level-triggered reconciliation, single-point OS signal management, clean DI with context propagation, Viper environment variable overrides (`v.AutomaticEnv()`), and automated cache/metric cleanup.
 
-1. **Broken Test Suite**: `nginx_test.go`, `app_test.go`, and `kubernetes/client_test.go` are out of sync with recent signatures (`NewNginxAdapter`, `SyncUpstream`, `NewApp`, and `informerFactory` initialization). `controller_test.go` is missing.
-2. **NGINX TLS RootCA Bug**: In `internal/adapters/loadbalancer/nginx/client.go`, `x509.NewCertPool()` is instantiated when `len(ngx.CA) > 0`, but `AppendCertsFromPEM(ngx.CA)` is never called.
-3. **NGINX Concurrency Semaphore**: `SyncAllUpstreams` in `internal/adapters/loadbalancer/nginx/nginx.go` does not acquire `a.semaphore`, risking connection spikes during periodic bulk reconciliation.
-4. **Immediate Service Deletion & Zero-Ready-Pods Bug**: In `internal/controller/controller.go`, deleting a Service removes it from `state.Services` before `syncHandler` runs, causing `syncHandler` to return `nil` without removing backends from the LB until the periodic ticker fires. Similarly, when `buildUpstream` returns `nil` (0 ready pods), `syncUpstreamsForService` exits early instead of syncing an empty backend list to clear active traffic immediately.
-5. **Lifecycle Duplication**: `di.NewContainer` and `app.Start` both call `loader.Load()`. Signal handling (`SIGINT`/`SIGTERM`) and `app.Stop` are duplicated in both `main.go` and `app.Start`.
+### Phase 2 Focus (Upcoming)
+1. **Envoy Adapter**: Implement gRPC/REST Envoy Dynamic Upstream adapter matching the `LoadBalancerAdapter` port.
+2. **HAProxy Adapter**: Implement HAProxy Runtime API socket / Data Plane API adapter.
+3. **End-to-End & Integration Testing**: `envtest` control plane tests and `testcontainers-go` containerized NGINX tests under `//go:build integration`.

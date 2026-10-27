@@ -13,4 +13,7 @@ type Upstream struct {
 	Type string
 	// Config is the load balancer configuration (e.g., NginxConfig or EnvoyConfig).
 	Config interface{}
+	// PreserveExistingBackends indicates that existing backends on the external LB should be left untouched.
+	// Used by the Safety Net (allow_empty_upstream: false) and Fail-Static error handling to prevent accidental draining.
+	PreserveExistingBackends bool
 }

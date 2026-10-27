@@ -254,6 +254,11 @@ func (a *NginxAdapter) SyncAllUpstreams(ctx context.Context, desiredUpstreams ma
 
 	// 1. Reconcile all desired upstreams to actively fix any state drift
 	for _, desiredUp := range desiredUpstreams {
+		if desiredUp.PreserveExistingBackends {
+			a.logger.Info("Preserving existing backends for upstream (safety net / fail-static)",
+				logging.Field{Key: "upstream", Value: desiredUp.Name})
+			continue
+		}
 		if err := a.SyncUpstream(ctx, desiredUp); err != nil {
 			errors = multierror.Append(errors, fmt.Errorf("sync upstream %s failed: %w", desiredUp.Name, err))
 		}
@@ -354,7 +359,7 @@ func (a *NginxAdapter) buildAddPath(upstreamName, serverAddr string, weight int)
 		url.QueryEscape(upstreamName),
 		url.QueryEscape(serverAddr),
 		weight)
-	if !strings.Contains(api, "add") {
+	if !hasQueryParam(a.config.AddAPI, "add") {
 		path += "&add="
 	}
 	return path
@@ -371,10 +376,18 @@ func (a *NginxAdapter) buildRemovePath(upstreamName, serverAddr string) string {
 		delim,
 		url.QueryEscape(upstreamName),
 		url.QueryEscape(serverAddr))
-	if !strings.Contains(api, "remove") {
+	if !hasQueryParam(a.config.RemoveAPI, "remove") {
 		path += "&remove="
 	}
 	return path
+}
+
+func hasQueryParam(rawURL, param string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return u.Query().Has(param)
 }
 
 // پارس کردن خروجی متنی Bulk NGINX و نگاشت آن به ساختار Map

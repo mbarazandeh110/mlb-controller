@@ -26,6 +26,7 @@ type KubernetesAdapter struct {
 	config          config.KubernetesConfig
 	informerFactory informers.SharedInformerFactory
 	startOnce       sync.Once
+	startErr        error
 }
 
 func NewKubernetesAdapter(k8sCfg config.KubernetesConfig, logger logging.Logger) (*KubernetesAdapter, error) {
@@ -54,7 +55,6 @@ func (k *KubernetesAdapter) Start(ctx context.Context) error {
 		return fmt.Errorf("informerFactory is nil")
 	}
 
-	var syncErr error
 	k.startOnce.Do(func() {
 		// Touch informers to instantiate them before factory start
 		svcInformer := k.informerFactory.Core().V1().Services().Informer()
@@ -65,12 +65,12 @@ func (k *KubernetesAdapter) Start(ctx context.Context) error {
 		k.logger.Info("Kubernetes informers started")
 
 		if !cache.WaitForCacheSync(ctx.Done(), svcInformer.HasSynced, podInformer.HasSynced, nodeInformer.HasSynced) {
-			syncErr = fmt.Errorf("failed to sync kubernetes informers")
+			k.startErr = fmt.Errorf("failed to sync kubernetes informers")
 			return
 		}
 		k.logger.Info("Kubernetes informer caches synchronized")
 	})
-	return syncErr
+	return k.startErr
 }
 
 func sendServiceEvent(ctx context.Context, events chan<- kubernetes.ServiceEvent, event kubernetes.ServiceEvent) {
@@ -82,7 +82,7 @@ func sendServiceEvent(ctx context.Context, events chan<- kubernetes.ServiceEvent
 
 func (k *KubernetesAdapter) WatchServices(ctx context.Context, requiredLabels map[string]string, events chan<- kubernetes.ServiceEvent) error {
 	informer := k.informerFactory.Core().V1().Services().Informer()
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			svc, ok := obj.(*corev1.Service)
 			if ok && k.isMLBService(svc) {
@@ -126,13 +126,11 @@ func (k *KubernetesAdapter) WatchServices(ctx context.Context, requiredLabels ma
 			}
 		},
 	})
-
-	if err := k.Start(ctx); err != nil {
+	if err != nil {
 		return err
 	}
 
-	<-ctx.Done()
-	return ctx.Err()
+	return k.Start(ctx)
 }
 
 func sendPodEvent(ctx context.Context, events chan<- kubernetes.PodEvent, event kubernetes.PodEvent) {
@@ -143,7 +141,7 @@ func sendPodEvent(ctx context.Context, events chan<- kubernetes.PodEvent, event 
 }
 func (k *KubernetesAdapter) WatchPods(ctx context.Context, events chan<- kubernetes.PodEvent) error {
 	informer := k.informerFactory.Core().V1().Pods().Informer()
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			if pod, ok := obj.(*corev1.Pod); ok {
 				sendPodEvent(ctx, events, kubernetes.PodEvent{
@@ -172,13 +170,11 @@ func (k *KubernetesAdapter) WatchPods(ctx context.Context, events chan<- kuberne
 			}
 		},
 	})
-
-	if err := k.Start(ctx); err != nil {
+	if err != nil {
 		return err
 	}
 
-	<-ctx.Done()
-	return ctx.Err()
+	return k.Start(ctx)
 }
 
 func sendNodeEvent(ctx context.Context, events chan<- kubernetes.NodeEvent, event kubernetes.NodeEvent) {
@@ -190,7 +186,7 @@ func sendNodeEvent(ctx context.Context, events chan<- kubernetes.NodeEvent, even
 
 func (k *KubernetesAdapter) WatchNodes(ctx context.Context, events chan<- kubernetes.NodeEvent) error {
 	informer := k.informerFactory.Core().V1().Nodes().Informer()
-	informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	_, err := informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			if node, ok := obj.(*corev1.Node); ok {
 				sendNodeEvent(ctx, events, kubernetes.NodeEvent{
@@ -219,13 +215,11 @@ func (k *KubernetesAdapter) WatchNodes(ctx context.Context, events chan<- kubern
 			}
 		},
 	})
-
-	if err := k.Start(ctx); err != nil {
+	if err != nil {
 		return err
 	}
 
-	<-ctx.Done()
-	return ctx.Err()
+	return k.Start(ctx)
 }
 
 // جایگزین کردن فراخوانی مستقیم API Server با خواندن از حافظه محلی کش (Lister)

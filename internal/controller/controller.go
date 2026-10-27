@@ -4,6 +4,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,7 +33,6 @@ type ControllerImpl struct {
 	serviceEvents     chan kubernetes.ServiceEvent
 	podEvents         chan kubernetes.PodEvent
 	nodeEvents        chan kubernetes.NodeEvent
-	syncTicker        *time.Ticker
 	syncStop          chan struct{}
 	syncUpstreamCtr   metrics.Counter
 	queue             workqueue.RateLimitingInterface
@@ -62,7 +62,7 @@ func NewController(
 		podEvents:         make(chan kubernetes.PodEvent, 2000),
 		nodeEvents:        make(chan kubernetes.NodeEvent, 500),
 		syncStop:          make(chan struct{}),
-		syncUpstreamCtr:   metrics.NewCounter("sync_upstreams_total", "Total number of upstream sync operations", nil),
+		syncUpstreamCtr:   metrics.NewCounter("mlb_sync_upstreams_total", "Total number of upstream sync operations", nil),
 		queue:             workqueue.NewNamedRateLimitingQueue(workqueue.DefaultControllerRateLimiter(), "mlb_sync_queue"),
 	}
 }
@@ -70,31 +70,25 @@ func NewController(
 func (c *ControllerImpl) Start(ctx context.Context) error {
 	c.logger.Info("Starting controller with Two-Way Reconciliation Engine")
 
+	// Register event handlers synchronously before starting informers to avoid any race condition
+	if err := c.k8sClient.WatchServices(ctx, nil, c.serviceEvents); err != nil {
+		return fmt.Errorf("failed to register service watcher: %w", err)
+	}
+	if err := c.k8sClient.WatchPods(ctx, c.podEvents); err != nil {
+		return fmt.Errorf("failed to register pod watcher: %w", err)
+	}
+	if err := c.k8sClient.WatchNodes(ctx, c.nodeEvents); err != nil {
+		return fmt.Errorf("failed to register node watcher: %w", err)
+	}
+
 	if err := c.k8sClient.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start and sync kubernetes informers: %w", err)
 	}
-
-	go func() {
-		if err := c.k8sClient.WatchServices(ctx, nil, c.serviceEvents); err != nil {
-			c.logger.Error("Failed to watch services", logging.Field{Key: "error", Value: err})
-		}
-	}()
-	go func() {
-		if err := c.k8sClient.WatchPods(ctx, c.podEvents); err != nil {
-			c.logger.Error("Failed to watch pods", logging.Field{Key: "error", Value: err})
-		}
-	}()
-	go func() {
-		if err := c.k8sClient.WatchNodes(ctx, c.nodeEvents); err != nil {
-			c.logger.Error("Failed to watch nodes", logging.Field{Key: "error", Value: err})
-		}
-	}()
 
 	for i := 0; i < c.config.RequestPoolSize; i++ {
 		go wait.UntilWithContext(ctx, c.runWorker, time.Second)
 	}
 
-	c.syncTicker = time.NewTicker(c.config.GlobalUpstreamSyncPeriod)
 	go c.runPeriodicSync(ctx)
 	go c.processEvents(ctx)
 
@@ -109,9 +103,6 @@ func (c *ControllerImpl) Start(ctx context.Context) error {
 }
 
 func (c *ControllerImpl) stop() {
-	if c.syncTicker != nil {
-		c.syncTicker.Stop()
-	}
 	select {
 	case <-c.syncStop:
 	default:
@@ -194,6 +185,7 @@ func (c *ControllerImpl) syncHandler(ctx context.Context, key string) error {
 					logging.Field{Key: "old_lb", Value: oldLB},
 					logging.Field{Key: "old_upstream", Value: oldUp},
 					logging.Field{Key: "error", Value: err})
+				return err
 			}
 		}
 	}
@@ -528,19 +520,48 @@ func (c *ControllerImpl) syncSingleLoadBalancer(ctx context.Context, lbName stri
 			continue
 		}
 
+		upstreamName := svc.Labels["mlb-upstream-name"]
+		if upstreamName == "" {
+			continue
+		}
+
 		pods, err := c.k8sClient.GetPodsForSelector(ctx, svc.Namespace, svc.Selector)
 		if err != nil {
-			c.logger.Error("Failed to list pods for reconciliation",
+			c.logger.Error("Failed to list pods for reconciliation; preserving upstream (fail-static)",
 				logging.Field{Key: "service", Value: svc.Name},
+				logging.Field{Key: "upstream", Value: upstreamName},
 				logging.Field{Key: "error", Value: err})
+			preserveUp := model.Upstream{
+				Name:                     upstreamName,
+				LoadBalancer:             lbName,
+				PreserveExistingBackends: true,
+			}
+			c.stateMutex.RLock()
+			if oldUp, ok := c.state.Upstreams[fmt.Sprintf("%s/%s", lbName, upstreamName)]; ok {
+				preserveUp.Backends = oldUp.Backends
+			}
+			c.stateMutex.RUnlock()
+			desiredState[upstreamName] = preserveUp
 			continue
 		}
 
 		upstream, err := c.buildUpstream(ctx, svc, pods)
 		if err != nil {
-			c.logger.Error("Failed to build upstream for reconciliation",
+			c.logger.Error("Failed to build upstream for reconciliation; preserving upstream (fail-static)",
 				logging.Field{Key: "service", Value: svc.Name},
+				logging.Field{Key: "upstream", Value: upstreamName},
 				logging.Field{Key: "error", Value: err})
+			preserveUp := model.Upstream{
+				Name:                     upstreamName,
+				LoadBalancer:             lbName,
+				PreserveExistingBackends: true,
+			}
+			c.stateMutex.RLock()
+			if oldUp, ok := c.state.Upstreams[fmt.Sprintf("%s/%s", lbName, upstreamName)]; ok {
+				preserveUp.Backends = oldUp.Backends
+			}
+			c.stateMutex.RUnlock()
+			desiredState[upstreamName] = preserveUp
 			continue
 		}
 		if upstream == nil {
@@ -548,8 +569,10 @@ func (c *ControllerImpl) syncSingleLoadBalancer(ctx context.Context, lbName stri
 		}
 
 		if existingUp, exists := desiredState[upstream.Name]; exists {
-			existingUp.Backends = c.mergeBackends(existingUp.Backends, upstream.Backends)
-			desiredState[upstream.Name] = existingUp
+			if !existingUp.PreserveExistingBackends {
+				existingUp.Backends = c.mergeBackends(existingUp.Backends, upstream.Backends)
+				desiredState[upstream.Name] = existingUp
+			}
 		} else {
 			desiredState[upstream.Name] = *upstream
 		}
@@ -559,6 +582,9 @@ func (c *ControllerImpl) syncSingleLoadBalancer(ctx context.Context, lbName stri
 
 	// Apply fallback default backend or safety net for upstreams with zero backends
 	for upName, up := range desiredState {
+		if up.PreserveExistingBackends {
+			continue
+		}
 		if len(up.Backends) == 0 {
 			var defBackend *config.DefaultBackendConfig
 			if lbConfig != nil && lbConfig.GetDefaultBackend() != nil {
@@ -586,23 +612,37 @@ func (c *ControllerImpl) syncSingleLoadBalancer(ctx context.Context, lbName stri
 					allowEmpty = true
 				}
 				if !allowEmpty {
-					// Safety net: preserve existing state from c.state if present
+					// Safety net: preserve existing state from c.state if present, and mark Preserved so LB is untouched
 					c.stateMutex.RLock()
 					oldUp, exists := c.state.Upstreams[fmt.Sprintf("%s/%s", lbName, upName)]
 					c.stateMutex.RUnlock()
 					if exists && len(oldUp.Backends) > 0 {
-						desiredState[upName] = oldUp
+						up.Backends = oldUp.Backends
 					}
+					up.PreserveExistingBackends = true
+					desiredState[upName] = up
 				}
 			}
 		}
 	}
 
-	// Update c.state.Upstreams and metrics
+	// Update c.state.Upstreams and metrics, cleaning up removed upstreams
 	c.stateMutex.Lock()
+	prefix := lbName + "/"
+	for k := range c.state.Upstreams {
+		if strings.HasPrefix(k, prefix) {
+			upName := strings.TrimPrefix(k, prefix)
+			if _, exists := desiredState[upName]; !exists {
+				delete(c.state.Upstreams, k)
+				c.metrics.UpdateBackendsTotal(upName, 0)
+			}
+		}
+	}
 	for upName, up := range desiredState {
-		c.state.Upstreams[fmt.Sprintf("%s/%s", lbName, upName)] = up
-		c.metrics.UpdateBackendsTotal(upName, float64(len(up.Backends)))
+		if !up.PreserveExistingBackends {
+			c.state.Upstreams[fmt.Sprintf("%s/%s", lbName, upName)] = up
+			c.metrics.UpdateBackendsTotal(upName, float64(len(up.Backends)))
+		}
 	}
 	c.stateMutex.Unlock()
 
@@ -704,6 +744,12 @@ func (c *ControllerImpl) mergeBackends(a, b []model.Backend) []model.Backend {
 	for _, be := range m {
 		res = append(res, be)
 	}
+	sort.Slice(res, func(i, j int) bool {
+		if res[i].IP != res[j].IP {
+			return res[i].IP < res[j].IP
+		}
+		return res[i].Port < res[j].Port
+	})
 	return res
 }
 

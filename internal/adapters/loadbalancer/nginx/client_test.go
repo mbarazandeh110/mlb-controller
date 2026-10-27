@@ -328,8 +328,7 @@ func TestDoRequest(t *testing.T) {
 
 	t.Run("ContextTimeout", func(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			time.Sleep(100 * time.Millisecond)
-			fmt.Fprint(w, "OK")
+			<-r.Context().Done()
 		}))
 		defer server.Close()
 
