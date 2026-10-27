@@ -70,6 +70,9 @@ func NewController(
 func (c *ControllerImpl) Start(ctx context.Context) error {
 	c.logger.Info("Starting controller with Two-Way Reconciliation Engine")
 
+	// Start event processing loop first so channel buffers never fill/block during initial cache sync
+	go c.processEvents(ctx)
+
 	// Register event handlers synchronously before starting informers to avoid any race condition
 	if err := c.k8sClient.WatchServices(ctx, nil, c.serviceEvents); err != nil {
 		return fmt.Errorf("failed to register service watcher: %w", err)
@@ -90,7 +93,6 @@ func (c *ControllerImpl) Start(ctx context.Context) error {
 	}
 
 	go c.runPeriodicSync(ctx)
-	go c.processEvents(ctx)
 
 	if err := c.SyncUpstreams(ctx); err != nil {
 		c.logger.Error("Initial bulk upstream sync failed", logging.Field{Key: "error", Value: err})
@@ -208,15 +210,16 @@ func (c *ControllerImpl) handleServiceDeletion(ctx context.Context, key string, 
 
 	// Check if another Service in the cluster still targets this (lbName, upstreamName)
 	services, err := c.k8sClient.ListServices()
+	if err != nil {
+		return fmt.Errorf("failed to list services during service deletion check for %s: %w", key, err)
+	}
 	var otherSvc *model.Service
-	if err == nil {
-		for _, s := range services {
-			sKey := fmt.Sprintf("%s/%s", s.Namespace, s.Name)
-			if sKey != key && s.Labels["mlb-loadbalancer-name"] == lbName && s.Labels["mlb-upstream-name"] == upstreamName {
-				copied := s
-				otherSvc = &copied
-				break
-			}
+	for _, s := range services {
+		sKey := fmt.Sprintf("%s/%s", s.Namespace, s.Name)
+		if sKey != key && s.Labels["mlb-loadbalancer-name"] == lbName && s.Labels["mlb-upstream-name"] == upstreamName {
+			copied := s
+			otherSvc = &copied
+			break
 		}
 	}
 
@@ -368,19 +371,28 @@ func (c *ControllerImpl) syncUpstreamsForService(ctx context.Context, svc model.
 
 	// Merge backends from other Services that target this same (lbName, upstreamName)
 	allServices, err := c.k8sClient.ListServices()
-	if err == nil {
-		for _, otherSvc := range allServices {
-			if otherSvc.Namespace == svc.Namespace && otherSvc.Name == svc.Name {
-				continue
+	if err != nil {
+		c.metrics.IncrementSyncErrors(upstreamName)
+		return fmt.Errorf("failed to list services for upstream merge (%s/%s): %w", lbName, upstreamName, err)
+	}
+
+	for _, otherSvc := range allServices {
+		if otherSvc.Namespace == svc.Namespace && otherSvc.Name == svc.Name {
+			continue
+		}
+		if otherSvc.Labels["mlb-loadbalancer-name"] == lbName && otherSvc.Labels["mlb-upstream-name"] == upstreamName {
+			otherPods, err := c.k8sClient.GetPodsForSelector(ctx, otherSvc.Namespace, otherSvc.Selector)
+			if err != nil {
+				c.metrics.IncrementSyncErrors(upstreamName)
+				return fmt.Errorf("failed to get pods for shared service %s/%s: %w", otherSvc.Namespace, otherSvc.Name, err)
 			}
-			if otherSvc.Labels["mlb-loadbalancer-name"] == lbName && otherSvc.Labels["mlb-upstream-name"] == upstreamName {
-				otherPods, err := c.k8sClient.GetPodsForSelector(ctx, otherSvc.Namespace, otherSvc.Selector)
-				if err == nil {
-					otherUp, err := c.buildUpstream(ctx, otherSvc, otherPods)
-					if err == nil && otherUp != nil {
-						upstream.Backends = c.mergeBackends(upstream.Backends, otherUp.Backends)
-					}
-				}
+			otherUp, err := c.buildUpstream(ctx, otherSvc, otherPods)
+			if err != nil {
+				c.metrics.IncrementSyncErrors(upstreamName)
+				return fmt.Errorf("failed to build upstream for shared service %s/%s: %w", otherSvc.Namespace, otherSvc.Name, err)
+			}
+			if otherUp != nil {
+				upstream.Backends = c.mergeBackends(upstream.Backends, otherUp.Backends)
 			}
 		}
 	}

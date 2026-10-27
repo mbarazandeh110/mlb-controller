@@ -49,6 +49,25 @@ func (l *ViperLoader) Load(ctx context.Context) (*domain.Config, error) {
 	v.AutomaticEnv()
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
 
+	// Register known configuration keys with defaults so v.AllSettings() exposes them when set via environment variables
+	v.SetDefault("global_upstream_sync_period", domain.GlobalUpstreamSyncPeriod)
+	v.SetDefault("request_pool_size", domain.RequestPoolSize)
+	v.SetDefault("allow_empty_upstream", false)
+	v.SetDefault("leader_election.enabled", false)
+	v.SetDefault("leader_election.lease_duration", domain.LeaderElectionLeaseDuration)
+	v.SetDefault("leader_election.renew_deadline", domain.LeaderElectionRenewDeadline)
+	v.SetDefault("leader_election.retry_period", domain.LeaderElectionRetryPeriod)
+	v.SetDefault("leader_election.resource_lock", "leases")
+	v.SetDefault("leader_election.resource_name", "mlb-controller-lease")
+	v.SetDefault("leader_election.resource_namespace", "default")
+	v.SetDefault("log.level", domain.LogLevel)
+	v.SetDefault("log.format", domain.LogFormant)
+	v.SetDefault("log.enabled", true)
+	v.SetDefault("metrics.port", domain.MetricsPort)
+	v.SetDefault("metrics.uri", domain.MetricsURI)
+	v.SetDefault("metrics.enabled", true)
+	v.SetDefault("kubernetes.resync_period", domain.KubernetesResyncPeriod)
+
 	if err := v.ReadInConfig(); err != nil {
 		return nil, fmt.Errorf("read config: %w", err)
 	}

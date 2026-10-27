@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"sync"
 	"testing"
-	"time"
 
 	"mlb-controller/internal/domain/model"
 
@@ -37,9 +36,7 @@ func (f *fakeKubernetes) WatchServices(ctx context.Context, labels map[string]st
 		}
 	}
 
-	// Block until context is canceled
-	<-ctx.Done()
-	return ctx.Err()
+	return nil
 }
 
 func (f *fakeKubernetes) WatchPods(ctx context.Context, events chan<- PodEvent) error {
@@ -59,8 +56,7 @@ func (f *fakeKubernetes) WatchPods(ctx context.Context, events chan<- PodEvent) 
 		}
 	}
 
-	<-ctx.Done()
-	return ctx.Err()
+	return nil
 }
 
 func (f *fakeKubernetes) WatchNodes(ctx context.Context, events chan<- NodeEvent) error {
@@ -80,8 +76,7 @@ func (f *fakeKubernetes) WatchNodes(ctx context.Context, events chan<- NodeEvent
 		}
 	}
 
-	<-ctx.Done()
-	return ctx.Err()
+	return nil
 }
 
 func (f *fakeKubernetes) GetPodsForSelector(ctx context.Context, namespace string, selector map[string]string) ([]model.Pod, error) {
@@ -164,58 +159,43 @@ func TestKubernetesPort(t *testing.T) {
 	}
 
 	t.Run("WatchServices sends events", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
-
 		events := make(chan ServiceEvent, 1)
-		go func() {
-			err := fake.WatchServices(ctx, map[string]string{"mlb-loadbalancer-name": "lb1"}, events)
-			assert.ErrorIs(t, err, ctx.Err())
-		}()
+		err := fake.WatchServices(context.Background(), map[string]string{"mlb-loadbalancer-name": "lb1"}, events)
+		assert.NoError(t, err)
 
 		select {
 		case evt := <-events:
 			assert.Equal(t, EventTypeAdd, evt.Type)
 			assert.Equal(t, "svc1", evt.Service.Name)
-		case <-time.After(50 * time.Millisecond):
+		default:
 			t.Fatal("no service event received")
 		}
 	})
 
 	t.Run("WatchPods sends events", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
-
 		events := make(chan PodEvent, 1)
-		go func() {
-			err := fake.WatchPods(ctx, events)
-			assert.ErrorIs(t, err, ctx.Err())
-		}()
+		err := fake.WatchPods(context.Background(), events)
+		assert.NoError(t, err)
 
 		select {
 		case evt := <-events:
 			assert.Equal(t, EventTypeAdd, evt.Type)
 			assert.Equal(t, "pod1", evt.Pod.Name)
-		case <-time.After(50 * time.Millisecond):
+		default:
 			t.Fatal("no pod event received")
 		}
 	})
 
 	t.Run("WatchNodes sends events", func(t *testing.T) {
-		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-		defer cancel()
-
 		events := make(chan NodeEvent, 1)
-		go func() {
-			err := fake.WatchNodes(ctx, events)
-			assert.ErrorIs(t, err, ctx.Err())
-		}()
+		err := fake.WatchNodes(context.Background(), events)
+		assert.NoError(t, err)
 
 		select {
 		case evt := <-events:
 			assert.Equal(t, EventTypeAdd, evt.Type)
 			assert.Equal(t, "node1", evt.Node.Name)
-		case <-time.After(50 * time.Millisecond):
+		default:
 			t.Fatal("no node event received")
 		}
 	})

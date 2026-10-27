@@ -105,3 +105,36 @@ func TestMapstructureDecode(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 10*time.Second, output.Timeout)
 }
+
+func TestViperLoader_EnvVarOverride(t *testing.T) {
+	content := `
+global_upstream_sync_period: 10s
+loadbalancers:
+  - name: test-nginx
+    type: nginx
+    protocol: http
+    addresses:
+      - ip: 127.0.0.1
+        port: 8080
+    list_api: /upstream_list
+    add_api: /upstream_add
+    remove_api: /upstream_remove
+`
+	tmpFile, err := os.CreateTemp("", "config_env*.yaml")
+	assert.NoError(t, err)
+	defer os.Remove(tmpFile.Name())
+	_, err = tmpFile.Write([]byte(content))
+	assert.NoError(t, err)
+	tmpFile.Close()
+
+	t.Setenv("ALLOW_EMPTY_UPSTREAM", "true")
+	t.Setenv("REQUEST_POOL_SIZE", "42")
+
+	ctx := context.Background()
+	loader := NewViperLoader(tmpFile.Name(), certificate_adapter.NewFileLoader())
+	cfg, err := loader.Load(ctx)
+	assert.NoError(t, err)
+	assert.NotNil(t, cfg)
+	assert.True(t, cfg.AllowEmptyUpstream)
+	assert.Equal(t, 42, cfg.RequestPoolSize)
+}

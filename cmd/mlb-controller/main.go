@@ -19,7 +19,11 @@ func main() {
 
 	resolvedConfigPath := *configPath
 	if resolvedConfigPath == "" {
-		if envPath := os.Getenv("CONFIG_PATH"); envPath != "" {
+		if envPath := os.Getenv("CONFIG_PATH"); envPath != "" && envPath != "/configs/config.yaml" {
+			resolvedConfigPath = envPath
+		} else if _, err := os.Stat("/etc/mlb-controller/config.yaml"); err == nil {
+			resolvedConfigPath = "/etc/mlb-controller/config.yaml"
+		} else if envPath != "" {
 			resolvedConfigPath = envPath
 		} else {
 			resolvedConfigPath = "/etc/mlb-controller/config.yaml"
